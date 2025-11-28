@@ -12,6 +12,9 @@ A beautiful, browser-based PDF reader that reads your books aloud like a profess
 - **🔊 Voice Selection**: Choose different voices for narration and dialogue
 - **📊 Progress Tracking**: Visual progress bar with page indicators
 - **💾 No Backend Required**: Everything runs in your browser - no server needed!
+- **🔒 Background Playback**: Keep listening when your phone is locked or in another app
+- **🎛️ Lock Screen Controls**: Control playback from your phone's control center/lock screen
+- **📚 Smart Text Chunking**: Larger, more natural reading chunks that keep dialogue together
 
 ## 🚀 Getting Started
 
@@ -92,7 +95,8 @@ Works best in:
 - Touch events are fully supported with tactile feedback
 - Speech synthesis includes workarounds for iOS-specific timing issues
 - Viewport is optimized for the iOS Safari address bar and safe areas
-- Text-to-speech works best with shorter reading sessions
+- **Background playback**: Continue listening when phone is locked (uses Media Session API)
+- **Control Center integration**: Play/Pause/Skip controls work from lock screen
 - For best results, use iOS 15.4 or later
 
 Note: Voice availability depends on your operating system and browser.
