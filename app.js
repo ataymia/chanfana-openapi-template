@@ -4,36 +4,75 @@
 // Track if pdf.js has loaded
 let pdfJsLoaded = false;
 
-// Detect iOS Safari for targeted workarounds
-const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || 
-              (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
-const isIOSSafari = isIOS && isSafari;
+// Robust iOS/Safari detection for modern devices including iPhone 15
+const isIOS = (() => {
+    // Check for iOS via user agent
+    const iosUA = /iPad|iPhone|iPod/.test(navigator.userAgent);
+    // Check for iPad OS (reports as Mac with touch)
+    const iPadOS = navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1;
+    // Check via platform
+    const iosPlatform = /iPhone|iPad|iPod/.test(navigator.platform);
+    // Check for iOS-specific features
+    const hasIOSWebkit = 'webkitAudioContext' in window && 'ontouchstart' in window && !navigator.userAgent.includes('Android');
+    // Modern iOS detection via standalone mode support
+    const supportsStandalone = 'standalone' in navigator;
+    
+    return iosUA || iPadOS || iosPlatform || (hasIOSWebkit && supportsStandalone);
+})();
+
+const isSafari = (() => {
+    const ua = navigator.userAgent.toLowerCase();
+    // Safari but not Chrome, Edge, or other Chromium browsers
+    return ua.includes('safari') && !ua.includes('chrome') && !ua.includes('chromium') && !ua.includes('edg');
+})();
+
+const isIOSSafari = isIOS || (isSafari && 'ontouchstart' in window);
+
+// Debug logging for iOS detection
+console.log('Device detection:', { isIOS, isSafari, isIOSSafari, userAgent: navigator.userAgent });
 
 // Set up pdf.js worker when library is loaded
 function initPdfJs() {
     if (typeof pdfjsLib !== 'undefined') {
         pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
         pdfJsLoaded = true;
+        console.log('PDF.js loaded successfully');
         return true;
     }
     return false;
 }
 
-// Try to init pdf.js immediately or wait for it
-if (!initPdfJs()) {
-    // If not loaded yet, set up a check
-    let attempts = 0;
-    const maxAttempts = 50; // 5 seconds max wait
-    const checkPdfJs = setInterval(() => {
-        attempts++;
+// Constants for PDF.js loading
+const PDFJS_CHECK_INTERVAL_MS = 100;
+const PDFJS_MAX_WAIT_MS = 10000;
+
+// Promise-based wait for PDF.js to load
+function waitForPdfJs(maxWaitMs = PDFJS_MAX_WAIT_MS) {
+    return new Promise((resolve, reject) => {
         if (initPdfJs()) {
-            clearInterval(checkPdfJs);
-        } else if (attempts >= maxAttempts) {
-            clearInterval(checkPdfJs);
-            console.error('PDF.js library failed to load. PDF functionality may not work.');
+            resolve(true);
+            return;
         }
-    }, 100);
+        
+        const startTime = Date.now();
+        const checkInterval = setInterval(() => {
+            if (initPdfJs()) {
+                clearInterval(checkInterval);
+                resolve(true);
+            } else if (Date.now() - startTime > maxWaitMs) {
+                clearInterval(checkInterval);
+                reject(new Error('PDF library failed to load. Please check your internet connection and refresh the page.'));
+            }
+        }, PDFJS_CHECK_INTERVAL_MS);
+    });
+}
+
+// Try to init pdf.js immediately, or start background loading
+if (!initPdfJs()) {
+    // Start background wait - don't block app initialization
+    waitForPdfJs().catch(err => {
+        console.error('PDF.js library failed to load:', err.message);
+    });
 }
 
 class PDFStoryReader {
@@ -188,18 +227,52 @@ class PDFStoryReader {
     }
 
     initEventListeners() {
-        // File upload events - use both click and touch for iOS compatibility
-        this.dropZone.addEventListener('click', (e) => {
-            e.preventDefault();
+        // Constants for touch handling
+        const TOUCH_CLICK_THRESHOLD_MS = 500; // Time to distinguish touch from click
+        
+        // Helper to add unified touch/click handlers for iOS compatibility
+        // This prevents double-firing while ensuring responsiveness
+        const addTapHandler = (element, handler, options = {}) => {
+            let touchMoved = false;
+            let lastTouchTime = 0;
+            
+            // Track touch movement to distinguish taps from scrolls
+            element.addEventListener('touchstart', (e) => {
+                touchMoved = false;
+            }, { passive: true });
+            
+            element.addEventListener('touchmove', () => {
+                touchMoved = true;
+            }, { passive: true });
+            
+            element.addEventListener('touchend', (e) => {
+                // Capture state to avoid race conditions
+                const wasTouchMove = touchMoved;
+                if (!wasTouchMove) {
+                    e.preventDefault();
+                    lastTouchTime = Date.now();
+                    // Execute handler immediately on touchend for responsiveness
+                    handler(e);
+                }
+            }, { passive: false });
+            
+            // Fallback click handler for non-touch devices
+            element.addEventListener('click', (e) => {
+                // Ignore click if it came from a recent touch event
+                const timeSinceTouch = Date.now() - lastTouchTime;
+                if (timeSinceTouch > TOUCH_CLICK_THRESHOLD_MS) {
+                    if (options.preventDefault !== false) {
+                        e.preventDefault();
+                    }
+                    handler(e);
+                }
+            });
+        };
+        
+        // File upload events with unified touch/click handling
+        addTapHandler(this.dropZone, () => {
             this.fileInput.click();
         });
-        
-        // iOS Safari: Add touchend handler for better file input triggering
-        this.dropZone.addEventListener('touchend', (e) => {
-            e.preventDefault();
-            // Small delay helps iOS Safari register the user gesture
-            setTimeout(() => this.fileInput.click(), 10);
-        }, { passive: false });
         
         this.fileInput.addEventListener('change', (e) => this.handleFileSelect(e));
         
@@ -232,34 +305,33 @@ class PDFStoryReader {
             this.processFile(file);
         });
 
-        // Reader controls
-        this.changeBookBtn.addEventListener('click', () => this.resetReader());
-        this.playPauseBtn.addEventListener('click', () => this.togglePlayPause());
-        this.rewindBtn.addEventListener('click', () => this.rewind());
-        this.forwardBtn.addEventListener('click', () => this.forward());
-        
-        // iOS Safari: Add touch handlers for reader controls
-        this.playPauseBtn.addEventListener('touchend', (e) => {
-            e.preventDefault();
-            this.togglePlayPause();
-        }, { passive: false });
-        
-        this.rewindBtn.addEventListener('touchend', (e) => {
-            e.preventDefault();
-            this.rewind();
-        }, { passive: false });
-        
-        this.forwardBtn.addEventListener('touchend', (e) => {
-            e.preventDefault();
-            this.forward();
-        }, { passive: false });
+        // Reader controls with unified touch/click handling
+        addTapHandler(this.changeBookBtn, () => this.resetReader());
+        addTapHandler(this.playPauseBtn, () => this.togglePlayPause());
+        addTapHandler(this.rewindBtn, () => this.rewind());
+        addTapHandler(this.forwardBtn, () => this.forward());
 
-        // Progress bar click to seek
-        document.querySelector('.progress-bar').addEventListener('click', (e) => {
-            const rect = e.target.getBoundingClientRect();
-            const percent = (e.clientX - rect.left) / rect.width;
-            this.seekToPercent(percent);
-        });
+        // Progress bar - handle both touch and click for seeking
+        const progressBar = document.querySelector('.progress-bar');
+        
+        if (progressBar) {
+            const handleProgressSeek = (clientX) => {
+                const rect = progressBar.getBoundingClientRect();
+                const percent = (clientX - rect.left) / rect.width;
+                this.seekToPercent(Math.max(0, Math.min(1, percent)));
+            };
+            
+            progressBar.addEventListener('click', (e) => {
+                handleProgressSeek(e.clientX);
+            });
+            
+            progressBar.addEventListener('touchend', (e) => {
+                if (e.changedTouches && e.changedTouches.length > 0) {
+                    e.preventDefault();
+                    handleProgressSeek(e.changedTouches[0].clientX);
+                }
+            }, { passive: false });
+        }
 
         // Settings
         this.speedControl.addEventListener('input', (e) => {
@@ -321,9 +393,10 @@ class PDFStoryReader {
         this.showLoading(true);
         
         try {
-            // Check if pdf.js is loaded
-            if (typeof pdfjsLib === 'undefined') {
-                throw new Error('PDF library not loaded. Please refresh the page and try again.');
+            // Wait for pdf.js to load if it hasn't yet
+            if (typeof pdfjsLib === 'undefined' || !pdfJsLoaded) {
+                console.log('PDF.js not loaded yet, waiting...');
+                await waitForPdfJs(PDFJS_MAX_WAIT_MS);
             }
             
             const arrayBuffer = await file.arrayBuffer();
@@ -516,6 +589,7 @@ class PDFStoryReader {
     }
 
     togglePlayPause() {
+        console.log('togglePlayPause called, isPlaying:', this.isPlaying);
         if (this.isPlaying) {
             this.pause();
         } else {
@@ -524,15 +598,38 @@ class PDFStoryReader {
     }
 
     play() {
-        if (this.paragraphs.length === 0) return;
+        // iOS Safari speech init constants
+        const IOS_INIT_VOLUME = 0.01; // Nearly silent volume for init utterance
+        const IOS_INIT_RATE = 10; // Maximum rate for quick init
+        const IOS_INIT_DELAY_MS = 100; // Delay after init utterance
+        
+        if (this.paragraphs.length === 0) {
+            console.log('No paragraphs to play');
+            return;
+        }
+        
+        console.log('Play triggered, isIOSSafari:', isIOSSafari, 'iosSpeechInitialized:', this.iosSpeechInitialized);
         
         // iOS Safari workaround: Initialize speech synthesis with a user gesture
-        // by speaking an empty utterance first
+        // by speaking a short utterance first - empty string may not work
         if (isIOSSafari && !this.iosSpeechInitialized) {
+            console.log('Initializing iOS Safari speech synthesis');
             this.speechSynthesis.cancel();
-            const initUtterance = new SpeechSynthesisUtterance('');
+            // Use a very short word instead of empty string for better iOS compatibility
+            const initUtterance = new SpeechSynthesisUtterance(' ');
+            initUtterance.volume = IOS_INIT_VOLUME;
+            initUtterance.rate = IOS_INIT_RATE;
             this.speechSynthesis.speak(initUtterance);
             this.iosSpeechInitialized = true;
+            
+            // Wait a tiny bit for the init utterance to process
+            setTimeout(() => {
+                this.isPlaying = true;
+                this.updatePlayButton();
+                this.startIOSSpeechTimer();
+                this.speakCurrent();
+            }, IOS_INIT_DELAY_MS);
+            return;
         }
         
         this.isPlaying = true;

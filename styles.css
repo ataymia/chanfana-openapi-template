@@ -487,4 +487,39 @@ header h1 {
     .container {
         min-height: -webkit-fill-available;
     }
+    
+    /* Ensure buttons have proper touch areas */
+    .control-btn,
+    .upload-btn,
+    .change-book-btn {
+        /* Minimum 44x44px touch target as per Apple guidelines */
+        min-width: 44px;
+        min-height: 44px;
+    }
+    
+    /* Prevent iOS rubber-banding issues */
+    .text-display {
+        -webkit-overflow-scrolling: touch;
+    }
+}
+
+/* Additional iOS Safari fixes for buttons */
+button, .upload-btn, .control-btn {
+    /* Prevent iOS Safari button styling issues */
+    -webkit-appearance: none;
+    appearance: none;
+    /* Ensure buttons are tappable */
+    cursor: pointer;
+    /* Prevent double-tap zoom */
+    touch-action: manipulation;
+    /* Remove default tap highlight */
+    -webkit-tap-highlight-color: rgba(0,0,0,0);
+}
+
+/* Ensure file input is hidden properly but still accessible */
+#file-input {
+    display: none !important;
+    visibility: hidden !important;
+    position: absolute;
+    left: -9999px;
 }
