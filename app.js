@@ -1,10 +1,14 @@
 // PDF Story Reader - Text to Speech Application
 // Uses pdf.js for PDF extraction and Web Speech API for TTS
 
+// Track if pdf.js has loaded
+let pdfJsLoaded = false;
+
 // Set up pdf.js worker when library is loaded
 function initPdfJs() {
     if (typeof pdfjsLib !== 'undefined') {
         pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+        pdfJsLoaded = true;
         return true;
     }
     return false;
@@ -13,9 +17,15 @@ function initPdfJs() {
 // Try to init pdf.js immediately or wait for it
 if (!initPdfJs()) {
     // If not loaded yet, set up a check
+    let attempts = 0;
+    const maxAttempts = 50; // 5 seconds max wait
     const checkPdfJs = setInterval(() => {
+        attempts++;
         if (initPdfJs()) {
             clearInterval(checkPdfJs);
+        } else if (attempts >= maxAttempts) {
+            clearInterval(checkPdfJs);
+            console.error('PDF.js library failed to load. PDF functionality may not work.');
         }
     }, 100);
 }
@@ -152,23 +162,33 @@ class PDFStoryReader {
         this.dropZone.addEventListener('click', () => this.fileInput.click());
         this.fileInput.addEventListener('change', (e) => this.handleFileSelect(e));
         
-        // Drag and drop
-        this.dropZone.addEventListener('dragover', (e) => {
+        // Drag and drop - need to handle dragenter, dragover, dragleave, and drop
+        // Both dragenter and dragover need preventDefault to allow drop
+        this.dropZone.addEventListener('dragenter', (e) => {
             e.preventDefault();
+            e.stopPropagation();
             this.dropZone.classList.add('dragover');
         });
         
-        this.dropZone.addEventListener('dragleave', () => {
+        this.dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            this.dropZone.classList.add('dragover');
+        });
+        
+        this.dropZone.addEventListener('dragleave', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
             this.dropZone.classList.remove('dragover');
         });
         
         this.dropZone.addEventListener('drop', (e) => {
             e.preventDefault();
+            e.stopPropagation();
             this.dropZone.classList.remove('dragover');
+            
             const file = e.dataTransfer.files[0];
-            if (file && file.type === 'application/pdf') {
-                this.loadPDF(file);
-            }
+            this.processFile(file);
         });
 
         // Reader controls
@@ -208,13 +228,36 @@ class PDFStoryReader {
                 this.pause();
             }
         });
+
+        // Prevent browser from opening files dropped outside the drop zone
+        document.addEventListener('dragover', (e) => {
+            e.preventDefault();
+        });
+        document.addEventListener('drop', (e) => {
+            e.preventDefault();
+        });
+    }
+
+    // Helper method to validate and process a file
+    processFile(file) {
+        if (!file) {
+            alert('No file detected. Please try again.');
+            return;
+        }
+        
+        // Check file extension as MIME type may be unreliable
+        const isPdf = file.type === 'application/pdf' || 
+                      file.name.toLowerCase().endsWith('.pdf');
+        if (isPdf) {
+            this.loadPDF(file);
+        } else {
+            alert('Please upload a PDF file. Received: ' + (file.name || 'unknown file'));
+        }
     }
 
     handleFileSelect(e) {
         const file = e.target.files[0];
-        if (file && file.type === 'application/pdf') {
-            this.loadPDF(file);
-        }
+        this.processFile(file);
     }
 
     async loadPDF(file) {
