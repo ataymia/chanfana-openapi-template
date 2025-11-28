@@ -46,6 +46,9 @@ function initPdfJs() {
 const PDFJS_CHECK_INTERVAL_MS = 100;
 const PDFJS_MAX_WAIT_MS = 10000;
 
+// Media Session artwork - URL-encoded SVG for lock screen display
+const MEDIA_SESSION_ARTWORK_URL = 'data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20100%20100%22%3E%3Ctext%20y%3D%22.9em%22%20font-size%3D%2290%22%3E%F0%9F%93%9A%3C%2Ftext%3E%3C%2Fsvg%3E';
+
 // Promise-based wait for PDF.js to load
 function waitForPdfJs(maxWaitMs = PDFJS_MAX_WAIT_MS) {
     return new Promise((resolve, reject) => {
@@ -313,7 +316,7 @@ class PDFStoryReader {
                 artist: 'PDF Story Reader',
                 album: pageInfo,
                 artwork: [
-                    { src: 'data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20100%20100%22%3E%3Ctext%20y%3D%22.9em%22%20font-size%3D%2290%22%3E%F0%9F%93%9A%3C%2Ftext%3E%3C%2Fsvg%3E', sizes: '96x96', type: 'image/svg+xml' }
+                    { src: MEDIA_SESSION_ARTWORK_URL, sizes: '96x96', type: 'image/svg+xml' }
                 ]
             });
         } catch (e) {
@@ -884,8 +887,10 @@ class PDFStoryReader {
             // These are fallback limits for any remaining very long chunks
             const maxChars = isIOSSafari ? 800 : 1500;
             if (textToSpeak.length > maxChars) {
-                // Find a good break point (prefer sentence boundaries)
+                // Find a good break point (prefer sentence boundaries over word boundaries)
                 let breakPoint = textToSpeak.lastIndexOf('. ', maxChars);
+                // If no sentence break found in the latter half, fall back to word break
+                // Using maxChars/2 ensures we don't create tiny chunks from early sentence breaks
                 if (breakPoint < maxChars / 2) {
                     breakPoint = textToSpeak.lastIndexOf(' ', maxChars);
                 }
