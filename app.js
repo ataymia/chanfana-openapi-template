@@ -4,6 +4,12 @@
 // Track if pdf.js has loaded
 let pdfJsLoaded = false;
 
+// Detect iOS Safari for targeted workarounds
+const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || 
+              (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+const isIOSSafari = isIOS && isSafari;
+
 // Set up pdf.js worker when library is loaded
 function initPdfJs() {
     if (typeof pdfjsLib !== 'undefined') {
@@ -47,6 +53,10 @@ class PDFStoryReader {
         this.currentSpeaker = null;
         this.speakerVoices = new Map();
         
+        // iOS Safari workaround: timer to prevent speech from getting stuck
+        this.iosSpeechTimer = null;
+        this.iosSpeechInitialized = false;
+        
         this.initElements();
         this.initVoices();
         this.initEventListeners();
@@ -88,7 +98,9 @@ class PDFStoryReader {
         // Load voices when they become available
         const loadVoices = () => {
             this.voices = this.speechSynthesis.getVoices();
-            this.populateVoiceSelects();
+            if (this.voices.length > 0) {
+                this.populateVoiceSelects();
+            }
         };
 
         // Chrome needs this event
@@ -98,6 +110,24 @@ class PDFStoryReader {
         
         // Also try loading immediately for Firefox/Safari
         loadVoices();
+        
+        // iOS Safari workaround: voices may not be immediately available
+        // Retry loading voices multiple times
+        if (this.voices.length === 0) {
+            let retryCount = 0;
+            const maxRetries = 20;
+            const retryInterval = setInterval(() => {
+                retryCount++;
+                this.voices = this.speechSynthesis.getVoices();
+                if (this.voices.length > 0) {
+                    this.populateVoiceSelects();
+                    clearInterval(retryInterval);
+                } else if (retryCount >= maxRetries) {
+                    clearInterval(retryInterval);
+                    console.warn('Could not load voices after multiple attempts');
+                }
+            }, 250);
+        }
     }
 
     populateVoiceSelects() {
@@ -158,8 +188,19 @@ class PDFStoryReader {
     }
 
     initEventListeners() {
-        // File upload events
-        this.dropZone.addEventListener('click', () => this.fileInput.click());
+        // File upload events - use both click and touch for iOS compatibility
+        this.dropZone.addEventListener('click', (e) => {
+            e.preventDefault();
+            this.fileInput.click();
+        });
+        
+        // iOS Safari: Add touchend handler for better file input triggering
+        this.dropZone.addEventListener('touchend', (e) => {
+            e.preventDefault();
+            // Small delay helps iOS Safari register the user gesture
+            setTimeout(() => this.fileInput.click(), 10);
+        }, { passive: false });
+        
         this.fileInput.addEventListener('change', (e) => this.handleFileSelect(e));
         
         // Drag and drop - need to handle dragenter, dragover, dragleave, and drop
@@ -196,6 +237,22 @@ class PDFStoryReader {
         this.playPauseBtn.addEventListener('click', () => this.togglePlayPause());
         this.rewindBtn.addEventListener('click', () => this.rewind());
         this.forwardBtn.addEventListener('click', () => this.forward());
+        
+        // iOS Safari: Add touch handlers for reader controls
+        this.playPauseBtn.addEventListener('touchend', (e) => {
+            e.preventDefault();
+            this.togglePlayPause();
+        }, { passive: false });
+        
+        this.rewindBtn.addEventListener('touchend', (e) => {
+            e.preventDefault();
+            this.rewind();
+        }, { passive: false });
+        
+        this.forwardBtn.addEventListener('touchend', (e) => {
+            e.preventDefault();
+            this.forward();
+        }, { passive: false });
 
         // Progress bar click to seek
         document.querySelector('.progress-bar').addEventListener('click', (e) => {
@@ -469,8 +526,24 @@ class PDFStoryReader {
     play() {
         if (this.paragraphs.length === 0) return;
         
+        // iOS Safari workaround: Initialize speech synthesis with a user gesture
+        // by speaking an empty utterance first
+        if (isIOSSafari && !this.iosSpeechInitialized) {
+            this.speechSynthesis.cancel();
+            const initUtterance = new SpeechSynthesisUtterance('');
+            this.speechSynthesis.speak(initUtterance);
+            this.iosSpeechInitialized = true;
+        }
+        
         this.isPlaying = true;
         this.updatePlayButton();
+        
+        // iOS Safari workaround: Start a timer to periodically resume speech
+        // This prevents iOS Safari from pausing speech unexpectedly
+        if (isIOSSafari) {
+            this.startIOSSpeechTimer();
+        }
+        
         this.speakCurrent();
     }
 
@@ -478,6 +551,28 @@ class PDFStoryReader {
         this.isPlaying = false;
         this.speechSynthesis.cancel();
         this.updatePlayButton();
+        
+        // iOS Safari workaround: Stop the resume timer
+        if (isIOSSafari) {
+            this.stopIOSSpeechTimer();
+        }
+    }
+    
+    // iOS Safari workaround: Timer to prevent speech from getting stuck
+    startIOSSpeechTimer() {
+        this.stopIOSSpeechTimer();
+        this.iosSpeechTimer = setInterval(() => {
+            if (this.isPlaying && this.speechSynthesis.paused) {
+                this.speechSynthesis.resume();
+            }
+        }, 10000); // Check every 10 seconds
+    }
+    
+    stopIOSSpeechTimer() {
+        if (this.iosSpeechTimer) {
+            clearInterval(this.iosSpeechTimer);
+            this.iosSpeechTimer = null;
+        }
     }
 
     updatePlayButton() {
@@ -494,6 +589,10 @@ class PDFStoryReader {
         if (!this.isPlaying || this.currentParagraphIndex >= this.paragraphs.length) {
             this.isPlaying = false;
             this.updatePlayButton();
+            // iOS Safari workaround: Stop the timer when done
+            if (isIOSSafari) {
+                this.stopIOSSpeechTimer();
+            }
             return;
         }
 
@@ -502,50 +601,73 @@ class PDFStoryReader {
 
         // Cancel any ongoing speech
         this.speechSynthesis.cancel();
-
-        // Create utterance
-        const utterance = new SpeechSynthesisUtterance(paragraph.text);
-        utterance.rate = this.speechRate;
-
-        // Smart voice selection
-        if (this.smartVoices) {
-            if (paragraph.isDialogue) {
-                // If we detected a speaker, use their assigned voice
-                if (paragraph.speaker) {
-                    utterance.voice = this.getVoiceForSpeaker(paragraph.speaker);
-                } else {
-                    utterance.voice = this.dialogueVoice;
+        
+        // iOS Safari workaround: Small delay after cancel to ensure clean state
+        const speakDelay = isIOSSafari ? 50 : 0;
+        
+        setTimeout(() => {
+            // Get the text to speak - chunk long text for iOS Safari
+            let textToSpeak = paragraph.text;
+            
+            // iOS Safari has issues with very long utterances (can fail after ~15 seconds)
+            // We already split into sentences in extractText, but ensure chunks are small enough
+            const maxChars = isIOSSafari ? 200 : 500;
+            if (textToSpeak.length > maxChars) {
+                // Find a good break point
+                const breakPoint = textToSpeak.lastIndexOf(' ', maxChars);
+                if (breakPoint > 0) {
+                    textToSpeak = textToSpeak.substring(0, breakPoint);
                 }
-                // Slightly increase pitch for dialogue to differentiate
-                utterance.pitch = 1.1;
+            }
+
+            // Create utterance
+            const utterance = new SpeechSynthesisUtterance(textToSpeak);
+            utterance.rate = this.speechRate;
+
+            // Smart voice selection
+            if (this.smartVoices) {
+                if (paragraph.isDialogue) {
+                    // If we detected a speaker, use their assigned voice
+                    if (paragraph.speaker) {
+                        utterance.voice = this.getVoiceForSpeaker(paragraph.speaker);
+                    } else {
+                        utterance.voice = this.dialogueVoice;
+                    }
+                    // Slightly increase pitch for dialogue to differentiate
+                    utterance.pitch = 1.1;
+                } else {
+                    utterance.voice = this.narratorVoice;
+                    utterance.pitch = 1.0;
+                }
             } else {
                 utterance.voice = this.narratorVoice;
-                utterance.pitch = 1.0;
             }
-        } else {
-            utterance.voice = this.narratorVoice;
-        }
 
-        // Handle completion
-        utterance.onend = () => {
-            this.currentParagraphIndex++;
-            if (this.isPlaying) {
-                // Small delay between paragraphs for natural pacing
-                setTimeout(() => this.speakCurrent(), 300);
-            }
-        };
+            // Handle completion
+            utterance.onend = () => {
+                this.currentParagraphIndex++;
+                if (this.isPlaying) {
+                    // Small delay between paragraphs for natural pacing
+                    setTimeout(() => this.speakCurrent(), 300);
+                }
+            };
 
-        utterance.onerror = (e) => {
-            console.error('Speech error:', e);
-            // Try to continue despite error
-            this.currentParagraphIndex++;
-            if (this.isPlaying) {
-                setTimeout(() => this.speakCurrent(), 300);
-            }
-        };
+            utterance.onerror = (e) => {
+                console.error('Speech error:', e);
+                // iOS Safari workaround: Try to recover from speech errors
+                if (isIOSSafari) {
+                    this.speechSynthesis.cancel();
+                }
+                // Try to continue despite error
+                this.currentParagraphIndex++;
+                if (this.isPlaying) {
+                    setTimeout(() => this.speakCurrent(), isIOSSafari ? 500 : 300);
+                }
+            };
 
-        this.currentUtterance = utterance;
-        this.speechSynthesis.speak(utterance);
+            this.currentUtterance = utterance;
+            this.speechSynthesis.speak(utterance);
+        }, speakDelay);
     }
 
     rewind() {
@@ -592,6 +714,13 @@ class PDFStoryReader {
 
     resetReader() {
         this.pause();
+        
+        // iOS Safari workaround: Clean up the speech timer
+        if (isIOSSafari) {
+            this.stopIOSSpeechTimer();
+            this.iosSpeechInitialized = false;
+        }
+        
         this.pdfDoc = null;
         this.textContent = [];
         this.paragraphs = [];
@@ -613,6 +742,21 @@ class PDFStoryReader {
         }
     }
 }
+
+// iOS Safari viewport height fix
+// Sets a CSS variable to the actual viewport height
+function setViewportHeight() {
+    const vh = window.innerHeight * 0.01;
+    document.documentElement.style.setProperty('--vh', `${vh}px`);
+}
+
+// Set initial viewport height and update on resize/orientation change
+setViewportHeight();
+window.addEventListener('resize', setViewportHeight);
+window.addEventListener('orientationchange', () => {
+    // Small delay to allow iOS Safari to finish orientation animation
+    setTimeout(setViewportHeight, 100);
+});
 
 // Initialize the app when DOM is ready
 document.addEventListener('DOMContentLoaded', () => {

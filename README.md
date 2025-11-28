@@ -84,8 +84,16 @@ This makes the reading experience feel like listening to an audiobook with multi
 Works best in:
 - ✅ Google Chrome (best voice selection)
 - ✅ Microsoft Edge
-- ✅ Safari
+- ✅ Safari (desktop and mobile)
 - ✅ Firefox
+- ✅ **iOS Safari** (iPhone/iPad) - with optimized touch handling and speech synthesis workarounds
+
+### iOS Safari Notes
+- Touch events are fully supported with tactile feedback
+- Speech synthesis includes workarounds for iOS-specific timing issues
+- Viewport is optimized for the iOS Safari address bar and safe areas
+- Text-to-speech works best with shorter reading sessions
+- For best results, use iOS 15.4 or later
 
 Note: Voice availability depends on your operating system and browser.
 

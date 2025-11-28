@@ -4,18 +4,35 @@
     box-sizing: border-box;
 }
 
+/* iOS Safari viewport height fix */
+:root {
+    --vh: 1vh;
+}
+
 body {
     font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
     background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
     min-height: 100vh;
+    min-height: calc(var(--vh, 1vh) * 100);
+    min-height: -webkit-fill-available;
     color: #fff;
+    /* Prevent iOS Safari from zooming on input focus */
+    -webkit-text-size-adjust: 100%;
+    /* Improve touch scrolling on iOS */
+    -webkit-overflow-scrolling: touch;
 }
 
 .container {
     max-width: 900px;
     margin: 0 auto;
     padding: 20px;
+    padding-top: calc(20px + env(safe-area-inset-top));
+    padding-bottom: calc(20px + env(safe-area-inset-bottom));
+    padding-left: calc(20px + env(safe-area-inset-left));
+    padding-right: calc(20px + env(safe-area-inset-right));
     min-height: 100vh;
+    min-height: calc(var(--vh, 1vh) * 100);
+    min-height: -webkit-fill-available;
 }
 
 header {
@@ -54,12 +71,21 @@ header h1 {
     background: rgba(255, 255, 255, 0.05);
     transition: all 0.3s ease;
     cursor: pointer;
+    /* iOS Safari: Improve touch responsiveness */
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
 }
 
 .upload-area:hover, .upload-area.dragover {
     background: rgba(233, 69, 96, 0.1);
     border-color: #f39c12;
     transform: scale(1.02);
+}
+
+/* iOS Safari: Add active state for touch feedback */
+.upload-area:active {
+    background: rgba(233, 69, 96, 0.15);
+    transform: scale(0.98);
 }
 
 .upload-icon {
@@ -87,11 +113,19 @@ header h1 {
     cursor: pointer;
     transition: transform 0.3s ease, box-shadow 0.3s ease;
     margin-top: 10px;
+    /* iOS Safari: Improve touch responsiveness */
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
 }
 
 .upload-btn:hover {
     transform: translateY(-2px);
     box-shadow: 0 10px 30px rgba(233, 69, 96, 0.4);
+}
+
+/* iOS Safari: Add active state for touch feedback */
+.upload-btn:active {
+    transform: scale(0.95);
 }
 
 .file-info {
@@ -206,11 +240,23 @@ header h1 {
     cursor: pointer;
     transition: all 0.3s ease;
     color: #fff;
+    /* iOS Safari: Improve touch responsiveness */
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+    /* iOS Safari: Prevent text selection on double-tap */
+    -webkit-user-select: none;
+    user-select: none;
 }
 
 .control-btn:hover {
     background: rgba(255, 255, 255, 0.2);
     transform: translateY(-3px);
+}
+
+/* iOS Safari: Add active state for touch feedback */
+.control-btn:active {
+    transform: scale(0.95);
+    background: rgba(255, 255, 255, 0.25);
 }
 
 .control-btn.play-btn {
@@ -220,6 +266,11 @@ header h1 {
 
 .control-btn.play-btn:hover {
     box-shadow: 0 10px 30px rgba(233, 69, 96, 0.4);
+}
+
+/* iOS Safari: Add active state for play button */
+.control-btn.play-btn:active {
+    transform: scale(0.95);
 }
 
 .control-icon {
@@ -394,10 +445,15 @@ header h1 {
 
     .control-btn {
         padding: 15px 20px;
+        /* iOS Safari: Larger touch targets on mobile */
+        min-width: 70px;
+        min-height: 70px;
     }
 
     .control-btn.play-btn {
         padding: 20px 30px;
+        min-width: 90px;
+        min-height: 90px;
     }
 
     .setting-group {
@@ -407,5 +463,28 @@ header h1 {
 
     .setting-group label {
         min-width: auto;
+    }
+    
+    /* iOS Safari: Larger select dropdowns for easier touch */
+    .setting-group select {
+        min-height: 44px;
+        font-size: 16px; /* Prevents iOS Safari zoom on focus */
+    }
+    
+    /* iOS Safari: Larger slider for easier touch */
+    .setting-group input[type="range"] {
+        height: 20px;
+    }
+}
+
+/* iOS Safari specific styles */
+@supports (-webkit-touch-callout: none) {
+    body {
+        /* Use -webkit-fill-available for iOS Safari */
+        min-height: -webkit-fill-available;
+    }
+    
+    .container {
+        min-height: -webkit-fill-available;
     }
 }
