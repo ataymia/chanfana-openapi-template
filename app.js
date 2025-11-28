@@ -188,18 +188,7 @@ class PDFStoryReader {
             this.dropZone.classList.remove('dragover');
             
             const file = e.dataTransfer.files[0];
-            if (file) {
-                // Check file extension as MIME type may be unreliable
-                const isPdf = file.type === 'application/pdf' || 
-                              file.name.toLowerCase().endsWith('.pdf');
-                if (isPdf) {
-                    this.loadPDF(file);
-                } else {
-                    alert('Please upload a PDF file. Received: ' + (file.name || 'unknown file'));
-                }
-            } else {
-                alert('No file detected. Please try again.');
-            }
+            this.processFile(file);
         });
 
         // Reader controls
@@ -249,18 +238,26 @@ class PDFStoryReader {
         });
     }
 
+    // Helper method to validate and process a file
+    processFile(file) {
+        if (!file) {
+            alert('No file detected. Please try again.');
+            return;
+        }
+        
+        // Check file extension as MIME type may be unreliable
+        const isPdf = file.type === 'application/pdf' || 
+                      file.name.toLowerCase().endsWith('.pdf');
+        if (isPdf) {
+            this.loadPDF(file);
+        } else {
+            alert('Please upload a PDF file. Received: ' + (file.name || 'unknown file'));
+        }
+    }
+
     handleFileSelect(e) {
         const file = e.target.files[0];
-        if (file) {
-            // Check file extension as MIME type may be unreliable
-            const isPdf = file.type === 'application/pdf' || 
-                          file.name.toLowerCase().endsWith('.pdf');
-            if (isPdf) {
-                this.loadPDF(file);
-            } else {
-                alert('Please upload a PDF file. Received: ' + (file.name || 'unknown file'));
-            }
-        }
+        this.processFile(file);
     }
 
     async loadPDF(file) {
