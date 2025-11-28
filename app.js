@@ -36,25 +36,43 @@ function initPdfJs() {
     if (typeof pdfjsLib !== 'undefined') {
         pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
         pdfJsLoaded = true;
+        console.log('PDF.js loaded successfully');
         return true;
     }
     return false;
 }
 
-// Try to init pdf.js immediately or wait for it
-if (!initPdfJs()) {
-    // If not loaded yet, set up a check
-    let attempts = 0;
-    const maxAttempts = 50; // 5 seconds max wait
-    const checkPdfJs = setInterval(() => {
-        attempts++;
+// Constants for PDF.js loading
+const PDFJS_CHECK_INTERVAL_MS = 100;
+const PDFJS_MAX_WAIT_MS = 10000;
+
+// Promise-based wait for PDF.js to load
+function waitForPdfJs(maxWaitMs = PDFJS_MAX_WAIT_MS) {
+    return new Promise((resolve, reject) => {
         if (initPdfJs()) {
-            clearInterval(checkPdfJs);
-        } else if (attempts >= maxAttempts) {
-            clearInterval(checkPdfJs);
-            console.error('PDF.js library failed to load. PDF functionality may not work.');
+            resolve(true);
+            return;
         }
-    }, 100);
+        
+        const startTime = Date.now();
+        const checkInterval = setInterval(() => {
+            if (initPdfJs()) {
+                clearInterval(checkInterval);
+                resolve(true);
+            } else if (Date.now() - startTime > maxWaitMs) {
+                clearInterval(checkInterval);
+                reject(new Error('PDF library failed to load. Please check your internet connection and refresh the page.'));
+            }
+        }, PDFJS_CHECK_INTERVAL_MS);
+    });
+}
+
+// Try to init pdf.js immediately, or start background loading
+if (!initPdfJs()) {
+    // Start background wait - don't block app initialization
+    waitForPdfJs().catch(err => {
+        console.error('PDF.js library failed to load:', err.message);
+    });
 }
 
 class PDFStoryReader {
@@ -375,9 +393,10 @@ class PDFStoryReader {
         this.showLoading(true);
         
         try {
-            // Check if pdf.js is loaded
-            if (typeof pdfjsLib === 'undefined') {
-                throw new Error('PDF library not loaded. Please refresh the page and try again.');
+            // Wait for pdf.js to load if it hasn't yet
+            if (typeof pdfjsLib === 'undefined' || !pdfJsLoaded) {
+                console.log('PDF.js not loaded yet, waiting...');
+                await waitForPdfJs(PDFJS_MAX_WAIT_MS);
             }
             
             const arrayBuffer = await file.arrayBuffer();
