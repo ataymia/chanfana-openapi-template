@@ -1,72 +1,114 @@
-# OpenAPI Template
+# 📚 PDF Story Reader - Text to Speech
 
-[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/cloudflare/templates/tree/main/chanfana-openapi-template)
+A beautiful, browser-based PDF reader that reads your books aloud like a professional storyteller. Simply upload your PDF and enjoy hands-free reading with smart voice changes for different characters.
 
-![OpenAPI Template Preview](https://imagedelivery.net/wSMYJvS3Xw-n339CbDyDIA/91076b39-1f5b-46f6-7f14-536a6f183000/public)
+## ✨ Features
 
-<!-- dash-content-start -->
+- **📖 PDF Upload**: Drag & drop or click to upload any PDF book
+- **🎙️ Text-to-Speech**: Uses your browser's built-in speech synthesis
+- **▶️ Playback Controls**: Play, Pause, Rewind, and Fast Forward
+- **🎭 Smart Voice Changes**: Automatically detects dialogue and changes voices for different speakers
+- **🎚️ Speed Control**: Adjust reading speed from 0.5x to 2x
+- **🔊 Voice Selection**: Choose different voices for narration and dialogue
+- **📊 Progress Tracking**: Visual progress bar with page indicators
+- **💾 No Backend Required**: Everything runs in your browser - no server needed!
 
-This is a Cloudflare Worker with OpenAPI 3.1 Auto Generation and Validation using [chanfana](https://github.com/cloudflare/chanfana) and [Hono](https://github.com/honojs/hono).
+## 🚀 Getting Started
 
-This is an example project made to be used as a quick start into building OpenAPI compliant Workers that generates the
-`openapi.json` schema automatically from code and validates the incoming request to the defined parameters or request body.
-
-This template includes various endpoints, a D1 database, and integration tests using [Vitest](https://vitest.dev/) as examples. In endpoints, you will find [chanfana D1 AutoEndpoints](https://chanfana.com/endpoints/auto/d1) and a [normal endpoint](https://chanfana.com/endpoints/defining-endpoints) to serve as examples for your projects.
-
-Besides being able to see the OpenAPI schema (openapi.json) in the browser, you can also extract the schema locally no hassle by running this command `npm run schema`.
-
-<!-- dash-content-end -->
-
-> [!IMPORTANT]
-> When using C3 to create this project, select "no" when it asks if you want to deploy. You need to follow this project's [setup steps](https://github.com/cloudflare/templates/tree/main/openapi-template#setup-steps) before deploying.
-
-## Getting Started
-
-Outside of this repo, you can start a new project with this template using [C3](https://developers.cloudflare.com/pages/get-started/c3/) (the `create-cloudflare` CLI):
+### Option 1: Open Directly (Simplest)
+Just open `index.html` in any modern web browser (Chrome, Firefox, Edge, Safari).
 
 ```bash
-npm create cloudflare@latest -- --template=cloudflare/templates/openapi-template
+# On macOS
+open index.html
+
+# On Linux
+xdg-open index.html
+
+# On Windows
+start index.html
 ```
 
-A live public deployment of this template is available at [https://openapi-template.templates.workers.dev](https://openapi-template.templates.workers.dev)
-
-## Setup Steps
-
-1. Install the project dependencies with a package manager of your choice:
-   ```bash
-   npm install
-   ```
-2. Create a [D1 database](https://developers.cloudflare.com/d1/get-started/) with the name "openapi-template-db":
-   ```bash
-   npx wrangler d1 create openapi-template-db
-   ```
-   ...and update the `database_id` field in `wrangler.json` with the new database ID.
-3. Run the following db migration to initialize the database (notice the `migrations` directory in this project):
-   ```bash
-   npx wrangler d1 migrations apply DB --remote
-   ```
-4. Deploy the project!
-   ```bash
-   npx wrangler deploy
-   ```
-5. Monitor your worker
-   ```bash
-   npx wrangler tail
-   ```
-
-## Testing
-
-This template includes integration tests using [Vitest](https://vitest.dev/). To run the tests locally:
+### Option 2: Use a Local Server (Recommended)
+For the best experience, use a simple HTTP server:
 
 ```bash
-npm run test
+# Using Python 3
+python -m http.server 8000
+
+# Using Node.js (if you have npx)
+npx serve
+
+# Using PHP
+php -S localhost:8000
 ```
 
-Test files are located in the `tests/` directory, with examples demonstrating how to test your endpoints and database interactions.
+Then open `http://localhost:8000` in your browser.
 
-## Project structure
+### Option 3: Deploy to GitHub Pages
+1. Push this repository to GitHub
+2. Go to Settings → Pages
+3. Select "Deploy from a branch" → main → / (root)
+4. Your reader will be available at `https://yourusername.github.io/repo-name`
 
-1. Your main router is defined in `src/index.ts`.
-2. Each endpoint has its own file in `src/endpoints/`.
-3. Integration tests are located in the `tests/` directory.
-4. For more information read the [chanfana documentation](https://chanfana.com/), [Hono documentation](https://hono.dev/docs), and [Vitest documentation](https://vitest.dev/guide/).
+### Option 4: Deploy to Netlify/Vercel
+Simply connect your repository - no configuration needed! These platforms will automatically serve the static files.
+
+## 📱 How to Use
+
+1. **Upload Your PDF**: Drag and drop a PDF file onto the upload area, or click to browse
+2. **Wait for Processing**: The app will extract text from your PDF
+3. **Press Play**: Click the play button to start listening
+4. **Control Playback**:
+   - ⏪ **Rewind**: Go back ~5 paragraphs
+   - ▶️/⏸️ **Play/Pause**: Start or stop reading
+   - ⏩ **Forward**: Skip ahead ~5 paragraphs
+   - Click the progress bar to jump to any position
+5. **Adjust Settings**:
+   - **Speed**: Make it read faster or slower
+   - **Narrator Voice**: Choose the main reading voice
+   - **Dialogue Voice**: Choose a different voice for quoted speech
+   - **Smart Voice Changes**: Toggle automatic voice switching for characters
+
+## 🎭 Smart Voice Features
+
+The reader intelligently detects:
+- **Quoted dialogue** ("Hello!" she said)
+- **Speaker identification** (John said, Mary replied)
+- **Character consistency** (same character = same voice throughout)
+
+This makes the reading experience feel like listening to an audiobook with multiple voice actors!
+
+## 🌐 Browser Compatibility
+
+Works best in:
+- ✅ Google Chrome (best voice selection)
+- ✅ Microsoft Edge
+- ✅ Safari
+- ✅ Firefox
+
+Note: Voice availability depends on your operating system and browser.
+
+## 🔒 Privacy
+
+- **100% Client-Side**: Your PDFs never leave your device
+- **No Data Collection**: No analytics, no tracking, no cookies
+- **No Server Required**: Everything happens in your browser
+
+## 📄 Supported PDF Types
+
+- ✅ Text-based PDFs (most ebooks, documents)
+- ⚠️ Scanned PDFs may not work well (requires OCR)
+- ⚠️ PDFs with complex layouts may have reading order issues
+
+## 🛠️ Technical Details
+
+Built with:
+- **PDF.js**: Mozilla's PDF rendering library for text extraction
+- **Web Speech API**: Browser's built-in text-to-speech capability
+- **Vanilla JavaScript**: No frameworks, just pure JS
+- **CSS3**: Modern styling with gradients and animations
+
+## 📝 License
+
+MIT License - Feel free to use, modify, and distribute!
