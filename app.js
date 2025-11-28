@@ -49,6 +49,10 @@ const PDFJS_MAX_WAIT_MS = 10000;
 // Media Session artwork - URL-encoded SVG for lock screen display
 const MEDIA_SESSION_ARTWORK_URL = 'data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20100%20100%22%3E%3Ctext%20y%3D%22.9em%22%20font-size%3D%2290%22%3E%F0%9F%93%9A%3C%2Ftext%3E%3C%2Fsvg%3E';
 
+// Background audio volume - 1% is low enough to be nearly inaudible but high enough
+// for iOS to recognize it as active audio content for Media Session API
+const BACKGROUND_AUDIO_VOLUME = 0.01;
+
 // Promise-based wait for PDF.js to load
 function waitForPdfJs(maxWaitMs = PDFJS_MAX_WAIT_MS) {
     return new Promise((resolve, reject) => {
@@ -236,26 +240,107 @@ class PDFStoryReader {
     }
 
     initBackgroundAudio() {
-        // Create a silent audio element that loops to keep the audio session active
-        // This enables background playback when the phone is locked or app is in background
-        // Using a data URL for a tiny silent WAV file (avoids network requests)
-        const silentWavBase64 = 'UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA';
+        // Create an audio element with actual audio content to keep the audio session active
+        // iOS requires real audio content (not silence) to maintain background audio session
+        // and to register with the Media Session API for lock screen controls
         
+        // Create HTML audio element for Media Session registration
         this.backgroundAudio = document.createElement('audio');
         this.backgroundAudio.id = 'background-audio';
         this.backgroundAudio.loop = true;
-        this.backgroundAudio.volume = 0; // Silent - just to keep audio session active
-        this.backgroundAudio.src = 'data:audio/wav;base64,' + silentWavBase64;
         
-        // Ensure audio can play in background on iOS
+        // Generate a 5-second WAV file with a very quiet 440Hz tone for iOS compatibility
+        this.backgroundAudio.src = this.generateQuietToneDataURL();
+        
+        // iOS Safari attributes
         this.backgroundAudio.setAttribute('playsinline', '');
         this.backgroundAudio.setAttribute('webkit-playsinline', '');
+        
+        // Volume set to 1% - low enough to be nearly inaudible but high enough
+        // for iOS to recognize it as active audio for Media Session API
+        this.backgroundAudio.volume = BACKGROUND_AUDIO_VOLUME;
         
         // Append to body (hidden)
         this.backgroundAudio.style.display = 'none';
         document.body.appendChild(this.backgroundAudio);
         
+        // Add event listeners for debugging
+        this.backgroundAudio.addEventListener('play', () => {
+            console.log('Background audio started playing');
+            this.updateMediaSessionState();
+        });
+        
+        this.backgroundAudio.addEventListener('pause', () => {
+            console.log('Background audio paused');
+        });
+        
+        this.backgroundAudio.addEventListener('ended', () => {
+            console.log('Background audio ended, restarting...');
+            if (this.isPlaying) {
+                this.backgroundAudio.play().catch(e => console.log('Restart error:', e));
+            }
+        });
+        
         console.log('Background audio element initialized for lock screen support');
+    }
+    
+    generateQuietToneDataURL() {
+        // Generate a 5-second WAV file with a very quiet 440Hz sine wave
+        // This ensures iOS recognizes it as actual audio content for Media Session
+        const sampleRate = 44100;
+        const duration = 5; // 5 seconds
+        const frequency = 440; // 440Hz tone
+        const amplitude = 0.005; // Very quiet (0.5% volume)
+        
+        const numSamples = sampleRate * duration;
+        const numChannels = 1;
+        const bitsPerSample = 16;
+        const bytesPerSample = bitsPerSample / 8;
+        const blockAlign = numChannels * bytesPerSample;
+        const byteRate = sampleRate * blockAlign;
+        const dataSize = numSamples * blockAlign;
+        const fileSize = 44 + dataSize;
+        
+        const buffer = new ArrayBuffer(fileSize);
+        const view = new DataView(buffer);
+        
+        // WAV header
+        const writeString = (offset, string) => {
+            for (let i = 0; i < string.length; i++) {
+                view.setUint8(offset + i, string.charCodeAt(i));
+            }
+        };
+        
+        writeString(0, 'RIFF');
+        view.setUint32(4, fileSize - 8, true);
+        writeString(8, 'WAVE');
+        writeString(12, 'fmt ');
+        view.setUint32(16, 16, true); // fmt chunk size
+        view.setUint16(20, 1, true); // audio format (PCM)
+        view.setUint16(22, numChannels, true);
+        view.setUint32(24, sampleRate, true);
+        view.setUint32(28, byteRate, true);
+        view.setUint16(32, blockAlign, true);
+        view.setUint16(34, bitsPerSample, true);
+        writeString(36, 'data');
+        view.setUint32(40, dataSize, true);
+        
+        // Generate audio samples (quiet sine wave)
+        for (let i = 0; i < numSamples; i++) {
+            const t = i / sampleRate;
+            const sample = Math.sin(2 * Math.PI * frequency * t) * amplitude;
+            const intSample = Math.max(-32768, Math.min(32767, Math.floor(sample * 32767)));
+            view.setInt16(44 + i * bytesPerSample, intSample, true);
+        }
+        
+        // Convert to base64
+        const bytes = new Uint8Array(buffer);
+        let binary = '';
+        for (let i = 0; i < bytes.length; i++) {
+            binary += String.fromCharCode(bytes[i]);
+        }
+        
+        return 'data:audio/wav;base64,' + btoa(binary);
     }
 
     initMediaSession() {
@@ -265,6 +350,20 @@ class PDFStoryReader {
         }
         
         console.log('Initializing Media Session API for control center integration');
+        
+        // Set initial metadata immediately so the app appears in media controls
+        try {
+            navigator.mediaSession.metadata = new MediaMetadata({
+                title: 'PDF Story Reader',
+                artist: 'Ready to read',
+                album: 'Upload a PDF to begin',
+                artwork: [
+                    { src: MEDIA_SESSION_ARTWORK_URL, sizes: '96x96', type: 'image/svg+xml' }
+                ]
+            });
+        } catch (e) {
+            console.log('Error setting initial metadata:', e.message);
+        }
         
         // Set up media session action handlers for lock screen controls
         navigator.mediaSession.setActionHandler('play', () => {
@@ -300,6 +399,16 @@ class PDFStoryReader {
             });
         } catch (e) {
             console.log('Seek handlers not supported:', e.message);
+        }
+        
+        // Stop handler for when user swipes away the media notification
+        try {
+            navigator.mediaSession.setActionHandler('stop', () => {
+                console.log('Media Session: stop');
+                this.pause();
+            });
+        } catch (e) {
+            console.log('Stop handler not supported:', e.message);
         }
     }
 
@@ -337,21 +446,34 @@ class PDFStoryReader {
     startBackgroundAudio() {
         if (!this.backgroundAudio) return;
         
-        // Play the silent audio to keep the session active in background
-        const playPromise = this.backgroundAudio.play();
-        if (playPromise !== undefined) {
-            playPromise.catch(e => {
-                console.log('Background audio play error (expected on first load):', e.message);
-            });
+        console.log('Starting background audio for media session...');
+        
+        // Ensure the audio source is set
+        if (!this.backgroundAudio.src) {
+            this.backgroundAudio.src = this.generateQuietToneDataURL();
         }
         
-        this.updateMediaSessionMetadata();
-        this.updateMediaSessionState();
+        // Play the background audio to keep the session active
+        const playPromise = this.backgroundAudio.play();
+        if (playPromise !== undefined) {
+            playPromise.then(() => {
+                console.log('Background audio playing successfully - media session should be active');
+                this.updateMediaSessionMetadata();
+                this.updateMediaSessionState();
+            }).catch(e => {
+                console.log('Background audio play error:', e.message);
+                // Try again with user interaction required message
+                if (e.name === 'NotAllowedError') {
+                    console.log('Audio playback requires user interaction first');
+                }
+            });
+        }
     }
 
     stopBackgroundAudio() {
         if (!this.backgroundAudio) return;
         
+        console.log('Stopping background audio...');
         this.backgroundAudio.pause();
         this.updateMediaSessionState();
     }
