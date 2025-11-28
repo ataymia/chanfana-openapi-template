@@ -46,6 +46,13 @@ function initPdfJs() {
 const PDFJS_CHECK_INTERVAL_MS = 100;
 const PDFJS_MAX_WAIT_MS = 10000;
 
+// Media Session artwork - URL-encoded SVG for lock screen display
+const MEDIA_SESSION_ARTWORK_URL = 'data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20100%20100%22%3E%3Ctext%20y%3D%22.9em%22%20font-size%3D%2290%22%3E%F0%9F%93%9A%3C%2Ftext%3E%3C%2Fsvg%3E';
+
+// Background audio volume - 1% is low enough to be nearly inaudible but high enough
+// for iOS to recognize it as active audio content for Media Session API
+const BACKGROUND_AUDIO_VOLUME = 0.01;
+
 // Promise-based wait for PDF.js to load
 function waitForPdfJs(maxWaitMs = PDFJS_MAX_WAIT_MS) {
     return new Promise((resolve, reject) => {
@@ -96,8 +103,14 @@ class PDFStoryReader {
         this.iosSpeechTimer = null;
         this.iosSpeechInitialized = false;
         
+        // Background audio element for Media Session API (enables lock screen controls)
+        this.backgroundAudio = null;
+        this.mediaSessionSupported = 'mediaSession' in navigator;
+        
         this.initElements();
         this.initVoices();
+        this.initBackgroundAudio();
+        this.initMediaSession();
         this.initEventListeners();
     }
 
@@ -226,6 +239,245 @@ class PDFStoryReader {
         }
     }
 
+    initBackgroundAudio() {
+        // Create an audio element with actual audio content to keep the audio session active
+        // iOS requires real audio content (not silence) to maintain background audio session
+        // and to register with the Media Session API for lock screen controls
+        
+        // Create HTML audio element for Media Session registration
+        this.backgroundAudio = document.createElement('audio');
+        this.backgroundAudio.id = 'background-audio';
+        this.backgroundAudio.loop = true;
+        
+        // Generate a 5-second WAV file with a very quiet 440Hz tone for iOS compatibility
+        this.backgroundAudio.src = this.generateQuietToneDataURL();
+        
+        // iOS Safari attributes
+        this.backgroundAudio.setAttribute('playsinline', '');
+        this.backgroundAudio.setAttribute('webkit-playsinline', '');
+        
+        // Volume set to 1% - low enough to be nearly inaudible but high enough
+        // for iOS to recognize it as active audio for Media Session API
+        this.backgroundAudio.volume = BACKGROUND_AUDIO_VOLUME;
+        
+        // Append to body (hidden)
+        this.backgroundAudio.style.display = 'none';
+        document.body.appendChild(this.backgroundAudio);
+        
+        // Add event listeners for debugging
+        this.backgroundAudio.addEventListener('play', () => {
+            console.log('Background audio started playing');
+            this.updateMediaSessionState();
+        });
+        
+        this.backgroundAudio.addEventListener('pause', () => {
+            console.log('Background audio paused');
+        });
+        
+        this.backgroundAudio.addEventListener('ended', () => {
+            console.log('Background audio ended, restarting...');
+            if (this.isPlaying) {
+                this.backgroundAudio.play().catch(e => console.log('Restart error:', e));
+            }
+        });
+        
+        console.log('Background audio element initialized for lock screen support');
+    }
+    
+    generateQuietToneDataURL() {
+        // Generate a 5-second WAV file with a very quiet 440Hz sine wave
+        // This ensures iOS recognizes it as actual audio content for Media Session
+        const sampleRate = 44100;
+        const duration = 5; // 5 seconds
+        const frequency = 440; // 440Hz tone
+        const amplitude = 0.005; // Very quiet (0.5% volume)
+        
+        const numSamples = sampleRate * duration;
+        const numChannels = 1;
+        const bitsPerSample = 16;
+        const bytesPerSample = bitsPerSample / 8;
+        const blockAlign = numChannels * bytesPerSample;
+        const byteRate = sampleRate * blockAlign;
+        const dataSize = numSamples * blockAlign;
+        const fileSize = 44 + dataSize;
+        
+        const buffer = new ArrayBuffer(fileSize);
+        const view = new DataView(buffer);
+        
+        // WAV header
+        const writeString = (offset, string) => {
+            for (let i = 0; i < string.length; i++) {
+                view.setUint8(offset + i, string.charCodeAt(i));
+            }
+        };
+        
+        writeString(0, 'RIFF');
+        view.setUint32(4, fileSize - 8, true);
+        writeString(8, 'WAVE');
+        writeString(12, 'fmt ');
+        view.setUint32(16, 16, true); // fmt chunk size
+        view.setUint16(20, 1, true); // audio format (PCM)
+        view.setUint16(22, numChannels, true);
+        view.setUint32(24, sampleRate, true);
+        view.setUint32(28, byteRate, true);
+        view.setUint16(32, blockAlign, true);
+        view.setUint16(34, bitsPerSample, true);
+        writeString(36, 'data');
+        view.setUint32(40, dataSize, true);
+        
+        // Generate audio samples (quiet sine wave)
+        for (let i = 0; i < numSamples; i++) {
+            const t = i / sampleRate;
+            const sample = Math.sin(2 * Math.PI * frequency * t) * amplitude;
+            const intSample = Math.max(-32768, Math.min(32767, Math.floor(sample * 32767)));
+            view.setInt16(44 + i * bytesPerSample, intSample, true);
+        }
+        
+        // Convert to base64
+        const bytes = new Uint8Array(buffer);
+        let binary = '';
+        for (let i = 0; i < bytes.length; i++) {
+            binary += String.fromCharCode(bytes[i]);
+        }
+        
+        return 'data:audio/wav;base64,' + btoa(binary);
+    }
+
+    initMediaSession() {
+        if (!this.mediaSessionSupported) {
+            console.log('Media Session API not supported');
+            return;
+        }
+        
+        console.log('Initializing Media Session API for control center integration');
+        
+        // Set initial metadata immediately so the app appears in media controls
+        try {
+            navigator.mediaSession.metadata = new MediaMetadata({
+                title: 'PDF Story Reader',
+                artist: 'Ready to read',
+                album: 'Upload a PDF to begin',
+                artwork: [
+                    { src: MEDIA_SESSION_ARTWORK_URL, sizes: '96x96', type: 'image/svg+xml' }
+                ]
+            });
+        } catch (e) {
+            console.log('Error setting initial metadata:', e.message);
+        }
+        
+        // Set up media session action handlers for lock screen controls
+        navigator.mediaSession.setActionHandler('play', () => {
+            console.log('Media Session: play');
+            this.play();
+        });
+        
+        navigator.mediaSession.setActionHandler('pause', () => {
+            console.log('Media Session: pause');
+            this.pause();
+        });
+        
+        navigator.mediaSession.setActionHandler('previoustrack', () => {
+            console.log('Media Session: previoustrack (rewind)');
+            this.rewind();
+        });
+        
+        navigator.mediaSession.setActionHandler('nexttrack', () => {
+            console.log('Media Session: nexttrack (forward)');
+            this.forward();
+        });
+        
+        // Seek backward/forward handlers (for scrubbing controls)
+        try {
+            navigator.mediaSession.setActionHandler('seekbackward', (details) => {
+                console.log('Media Session: seekbackward', details);
+                this.rewind();
+            });
+            
+            navigator.mediaSession.setActionHandler('seekforward', (details) => {
+                console.log('Media Session: seekforward', details);
+                this.forward();
+            });
+        } catch (e) {
+            console.log('Seek handlers not supported:', e.message);
+        }
+        
+        // Stop handler for when user swipes away the media notification
+        try {
+            navigator.mediaSession.setActionHandler('stop', () => {
+                console.log('Media Session: stop');
+                this.pause();
+            });
+        } catch (e) {
+            console.log('Stop handler not supported:', e.message);
+        }
+    }
+
+    updateMediaSessionMetadata() {
+        if (!this.mediaSessionSupported) return;
+        
+        const currentParagraph = this.paragraphs[this.currentParagraphIndex];
+        const bookTitle = this.bookName ? this.bookName.textContent : 'PDF Story Reader';
+        const pageInfo = currentParagraph ? `Page ${currentParagraph.page}` : '';
+        
+        try {
+            navigator.mediaSession.metadata = new MediaMetadata({
+                title: bookTitle,
+                artist: 'PDF Story Reader',
+                album: pageInfo,
+                artwork: [
+                    { src: MEDIA_SESSION_ARTWORK_URL, sizes: '96x96', type: 'image/svg+xml' }
+                ]
+            });
+        } catch (e) {
+            console.log('Error setting media metadata:', e.message);
+        }
+    }
+
+    updateMediaSessionState() {
+        if (!this.mediaSessionSupported) return;
+        
+        try {
+            navigator.mediaSession.playbackState = this.isPlaying ? 'playing' : 'paused';
+        } catch (e) {
+            console.log('Error setting playback state:', e.message);
+        }
+    }
+
+    startBackgroundAudio() {
+        if (!this.backgroundAudio) return;
+        
+        console.log('Starting background audio for media session...');
+        
+        // Ensure the audio source is set
+        if (!this.backgroundAudio.src) {
+            this.backgroundAudio.src = this.generateQuietToneDataURL();
+        }
+        
+        // Play the background audio to keep the session active
+        const playPromise = this.backgroundAudio.play();
+        if (playPromise !== undefined) {
+            playPromise.then(() => {
+                console.log('Background audio playing successfully - media session should be active');
+                this.updateMediaSessionMetadata();
+                this.updateMediaSessionState();
+            }).catch(e => {
+                console.log('Background audio play error:', e.message);
+                // Try again with user interaction required message
+                if (e.name === 'NotAllowedError') {
+                    console.log('Audio playback requires user interaction first');
+                }
+            });
+        }
+    }
+
+    stopBackgroundAudio() {
+        if (!this.backgroundAudio) return;
+        
+        console.log('Stopping background audio...');
+        this.backgroundAudio.pause();
+        this.updateMediaSessionState();
+    }
+
     initEventListeners() {
         // Constants for touch handling
         const TOUCH_CLICK_THRESHOLD_MS = 500; // Time to distinguish touch from click
@@ -351,10 +603,16 @@ class PDFStoryReader {
             this.smartVoices = e.target.checked;
         });
 
-        // Handle page visibility to pause speech when tab is hidden
+        // Handle page visibility - DO NOT pause when tab is hidden to allow background playback
+        // The background audio and Media Session API will keep playback going when locked
         document.addEventListener('visibilitychange', () => {
             if (document.hidden && this.isPlaying) {
-                this.pause();
+                // Keep playing in background - update media session state
+                this.updateMediaSessionState();
+                console.log('Page hidden, continuing background playback');
+            } else if (!document.hidden && this.isPlaying) {
+                // Page visible again - ensure display is updated
+                this.updateDisplay();
             }
         });
 
@@ -472,25 +730,56 @@ class PDFStoryReader {
     }
 
     splitIntoSentences(text) {
-        // Split into sentences but keep them reasonably sized for TTS
-        const sentences = [];
+        // Split into larger, more natural chunks for TTS
+        // Target ~800-1000 chars to reduce interruptions, but respect natural breaks
+        const chunks = [];
         let current = '';
+        
+        // Constants for chunk sizing
+        const TARGET_MIN_SIZE = 600;  // Minimum preferred chunk size
+        const TARGET_MAX_SIZE = 1200; // Maximum chunk size before forcing split
+        const HARD_MAX_SIZE = 1500;   // Absolute maximum to prevent TTS issues
         
         // Split on sentence endings
         const parts = text.split(/(?<=[.!?])\s+/);
         
         parts.forEach(part => {
-            if (current.length + part.length < 300) {
+            const potentialLength = current.length + part.length + 1;
+            
+            // Smart chunking rules:
+            // 1. If under target min, always accumulate
+            // 2. If within target range, keep accumulating (dialogue-aware)
+            // 3. If getting long, look for good break points
+            // 4. At hard limit, must split
+            
+            if (current.length < TARGET_MIN_SIZE) {
+                // Under minimum - always add more
                 current += (current ? ' ' : '') + part;
+            } else if (potentialLength < TARGET_MAX_SIZE) {
+                // Within target range - continue accumulating
+                // This keeps dialogue and related text together naturally
+                current += (current ? ' ' : '') + part;
+            } else if (potentialLength < HARD_MAX_SIZE) {
+                // Getting long but not at hard limit - look for good break points
+                const isGoodBreak = /[.!?]["']?\s*$/.test(current) && !/^\s*["']/.test(part);
+                
+                if (isGoodBreak) {
+                    if (current) chunks.push(current);
+                    current = part;
+                } else {
+                    // Not a good break - continue accumulating
+                    current += (current ? ' ' : '') + part;
+                }
             } else {
-                if (current) sentences.push(current);
+                // At hard limit - must split
+                if (current) chunks.push(current);
                 current = part;
             }
         });
         
-        if (current) sentences.push(current);
+        if (current) chunks.push(current);
         
-        return sentences;
+        return chunks;
     }
 
     detectDialogue(text) {
@@ -627,6 +916,7 @@ class PDFStoryReader {
                 this.isPlaying = true;
                 this.updatePlayButton();
                 this.startIOSSpeechTimer();
+                this.startBackgroundAudio(); // Enable background playback
                 this.speakCurrent();
             }, IOS_INIT_DELAY_MS);
             return;
@@ -634,6 +924,9 @@ class PDFStoryReader {
         
         this.isPlaying = true;
         this.updatePlayButton();
+        
+        // Start background audio for lock screen control support
+        this.startBackgroundAudio();
         
         // iOS Safari workaround: Start a timer to periodically resume speech
         // This prevents iOS Safari from pausing speech unexpectedly
@@ -648,6 +941,9 @@ class PDFStoryReader {
         this.isPlaying = false;
         this.speechSynthesis.cancel();
         this.updatePlayButton();
+        
+        // Stop background audio
+        this.stopBackgroundAudio();
         
         // iOS Safari workaround: Stop the resume timer
         if (isIOSSafari) {
@@ -686,6 +982,7 @@ class PDFStoryReader {
         if (!this.isPlaying || this.currentParagraphIndex >= this.paragraphs.length) {
             this.isPlaying = false;
             this.updatePlayButton();
+            this.stopBackgroundAudio(); // Stop background audio when done
             // iOS Safari workaround: Stop the timer when done
             if (isIOSSafari) {
                 this.stopIOSSpeechTimer();
@@ -695,6 +992,7 @@ class PDFStoryReader {
 
         const paragraph = this.paragraphs[this.currentParagraphIndex];
         this.updateDisplay();
+        this.updateMediaSessionMetadata(); // Update lock screen info
 
         // Cancel any ongoing speech
         this.speechSynthesis.cancel();
@@ -707,13 +1005,19 @@ class PDFStoryReader {
             let textToSpeak = paragraph.text;
             
             // iOS Safari has issues with very long utterances (can fail after ~15 seconds)
-            // We already split into sentences in extractText, but ensure chunks are small enough
-            const maxChars = isIOSSafari ? 200 : 500;
+            // Increased limits since we now have smarter chunking at the paragraph level
+            // These are fallback limits for any remaining very long chunks
+            const maxChars = isIOSSafari ? 800 : 1500;
             if (textToSpeak.length > maxChars) {
-                // Find a good break point
-                const breakPoint = textToSpeak.lastIndexOf(' ', maxChars);
+                // Find a good break point (prefer sentence boundaries over word boundaries)
+                let breakPoint = textToSpeak.lastIndexOf('. ', maxChars);
+                // If no sentence break found in the latter half, fall back to word break
+                // Using maxChars/2 ensures we don't create tiny chunks from early sentence breaks
+                if (breakPoint < maxChars / 2) {
+                    breakPoint = textToSpeak.lastIndexOf(' ', maxChars);
+                }
                 if (breakPoint > 0) {
-                    textToSpeak = textToSpeak.substring(0, breakPoint);
+                    textToSpeak = textToSpeak.substring(0, breakPoint + 1);
                 }
             }
 
