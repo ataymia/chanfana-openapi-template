@@ -209,6 +209,9 @@ class PDFStoryReader {
     }
 
     initEventListeners() {
+        // Constants for touch handling
+        const TOUCH_CLICK_THRESHOLD_MS = 500; // Time to distinguish touch from click
+        
         // Helper to add unified touch/click handlers for iOS compatibility
         // This prevents double-firing while ensuring responsiveness
         const addTapHandler = (element, handler, options = {}) => {
@@ -225,7 +228,9 @@ class PDFStoryReader {
             }, { passive: true });
             
             element.addEventListener('touchend', (e) => {
-                if (!touchMoved) {
+                // Capture state to avoid race conditions
+                const wasTouchMove = touchMoved;
+                if (!wasTouchMove) {
                     e.preventDefault();
                     lastTouchTime = Date.now();
                     // Execute handler immediately on touchend for responsiveness
@@ -235,9 +240,9 @@ class PDFStoryReader {
             
             // Fallback click handler for non-touch devices
             element.addEventListener('click', (e) => {
-                // Ignore click if it came from a recent touch event (within 500ms)
+                // Ignore click if it came from a recent touch event
                 const timeSinceTouch = Date.now() - lastTouchTime;
-                if (timeSinceTouch > 500) {
+                if (timeSinceTouch > TOUCH_CLICK_THRESHOLD_MS) {
                     if (options.preventDefault !== false) {
                         e.preventDefault();
                     }
@@ -291,22 +296,24 @@ class PDFStoryReader {
         // Progress bar - handle both touch and click for seeking
         const progressBar = document.querySelector('.progress-bar');
         
-        const handleProgressSeek = (clientX) => {
-            const rect = progressBar.getBoundingClientRect();
-            const percent = (clientX - rect.left) / rect.width;
-            this.seekToPercent(Math.max(0, Math.min(1, percent)));
-        };
-        
-        progressBar.addEventListener('click', (e) => {
-            handleProgressSeek(e.clientX);
-        });
-        
-        progressBar.addEventListener('touchend', (e) => {
-            if (e.changedTouches && e.changedTouches.length > 0) {
-                e.preventDefault();
-                handleProgressSeek(e.changedTouches[0].clientX);
-            }
-        }, { passive: false });
+        if (progressBar) {
+            const handleProgressSeek = (clientX) => {
+                const rect = progressBar.getBoundingClientRect();
+                const percent = (clientX - rect.left) / rect.width;
+                this.seekToPercent(Math.max(0, Math.min(1, percent)));
+            };
+            
+            progressBar.addEventListener('click', (e) => {
+                handleProgressSeek(e.clientX);
+            });
+            
+            progressBar.addEventListener('touchend', (e) => {
+                if (e.changedTouches && e.changedTouches.length > 0) {
+                    e.preventDefault();
+                    handleProgressSeek(e.changedTouches[0].clientX);
+                }
+            }, { passive: false });
+        }
 
         // Settings
         this.speedControl.addEventListener('input', (e) => {
@@ -572,6 +579,11 @@ class PDFStoryReader {
     }
 
     play() {
+        // iOS Safari speech init constants
+        const IOS_INIT_VOLUME = 0.01; // Nearly silent volume for init utterance
+        const IOS_INIT_RATE = 10; // Maximum rate for quick init
+        const IOS_INIT_DELAY_MS = 100; // Delay after init utterance
+        
         if (this.paragraphs.length === 0) {
             console.log('No paragraphs to play');
             return;
@@ -586,8 +598,8 @@ class PDFStoryReader {
             this.speechSynthesis.cancel();
             // Use a very short word instead of empty string for better iOS compatibility
             const initUtterance = new SpeechSynthesisUtterance(' ');
-            initUtterance.volume = 0.01; // Nearly silent
-            initUtterance.rate = 10; // As fast as possible
+            initUtterance.volume = IOS_INIT_VOLUME;
+            initUtterance.rate = IOS_INIT_RATE;
             this.speechSynthesis.speak(initUtterance);
             this.iosSpeechInitialized = true;
             
@@ -597,7 +609,7 @@ class PDFStoryReader {
                 this.updatePlayButton();
                 this.startIOSSpeechTimer();
                 this.speakCurrent();
-            }, 100);
+            }, IOS_INIT_DELAY_MS);
             return;
         }
         
