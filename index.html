@@ -41,13 +41,7 @@
           </div>
 
           <label id="choose-file-btn" class="primary-btn" for="file-input">Choose PDF</label>
-          <input
-            id="file-input"
-            type="file"
-            accept=".pdf,application/pdf"
-            aria-label="Choose PDF file"
-            style="position:fixed;left:-10000px;top:auto;width:1px;height:1px;opacity:0;overflow:hidden;"
-          >
+          <input id="file-input" type="file" accept=".pdf,application/pdf" aria-label="Choose PDF file" style="position:fixed;left:-10000px;top:auto;width:1px;height:1px;opacity:0;overflow:hidden;">
 
           <p id="upload-status" class="upload-note" role="status" aria-live="polite">Choose a PDF to begin.</p>
           <p class="upload-note">Text PDFs can be narrated. Scanned-image PDFs can still open in the page viewer but may not have readable text.</p>
@@ -64,119 +58,35 @@
         <div class="book-toolbar">
           <div class="book-meta">
             <h2 id="book-name">Book title</h2>
-            <div class="book-stats">
-              <span id="book-pages">0 pages</span>
-              <span id="book-words">0 words</span>
-              <span id="book-time">0 min</span>
-            </div>
+            <div class="book-stats"><span id="book-pages">0 pages</span><span id="book-words">0 words</span><span id="book-time">0 min</span></div>
           </div>
-          <div class="toolbar-actions">
-            <button id="jump-viewer-to-audio" class="ghost-btn" type="button">Go to reading page</button>
-            <button id="read-viewed-page" class="ghost-btn" type="button">Read this page</button>
-          </div>
+          <div class="toolbar-actions"><button id="jump-viewer-to-audio" class="ghost-btn" type="button">Go to reading page</button><button id="read-viewed-page" class="ghost-btn" type="button">Read this page</button></div>
         </div>
 
         <div class="workspace-grid">
           <section class="panel page-panel" aria-label="PDF page viewer">
-            <div class="panel-heading">
-              <div><h3>Page viewer</h3></div>
-              <label class="switch-line" for="follow-narration">
-                <input id="follow-narration" type="checkbox" checked>
-                <span>Follow reading</span>
-              </label>
-            </div>
-
-            <div class="page-stage" id="page-stage">
-              <canvas id="pdf-canvas" aria-label="Rendered PDF page"></canvas>
-              <div id="page-render-status" class="page-render-status hidden">Loading page…</div>
-            </div>
-
-            <div class="page-controls">
-              <button id="prev-page" class="icon-btn" type="button" aria-label="Previous page">‹</button>
-              <div class="page-number-control">
-                <label for="page-number">Page</label>
-                <input id="page-number" type="number" min="1" value="1" inputmode="numeric">
-                <span id="page-count">/ 0</span>
-              </div>
-              <button id="next-page" class="icon-btn" type="button" aria-label="Next page">›</button>
-              <label class="zoom-control" for="page-zoom">
-                <span>Zoom</span>
-                <input id="page-zoom" type="range" min="70" max="180" step="10" value="110">
-                <strong id="page-zoom-value">110%</strong>
-              </label>
-            </div>
+            <div class="panel-heading"><div><h3>Page viewer</h3></div><label class="switch-line" for="follow-narration"><input id="follow-narration" type="checkbox" checked><span>Follow reading</span></label></div>
+            <div class="page-stage" id="page-stage"><canvas id="pdf-canvas" aria-label="Rendered PDF page"></canvas><div id="page-render-status" class="page-render-status hidden">Loading page…</div></div>
+            <div class="page-controls"><button id="prev-page" class="icon-btn" type="button" aria-label="Previous page">‹</button><div class="page-number-control"><label for="page-number">Page</label><input id="page-number" type="number" min="1" value="1" inputmode="numeric"><span id="page-count">/ 0</span></div><button id="next-page" class="icon-btn" type="button" aria-label="Next page">›</button><label class="zoom-control" for="page-zoom"><span>Zoom</span><input id="page-zoom" type="range" min="70" max="180" step="10" value="110"><strong id="page-zoom-value">110%</strong></label></div>
           </section>
 
           <section class="panel reading-panel" aria-label="Reading text and playback controls">
-            <div class="panel-heading reading-heading">
-              <div><h3 id="current-location">Page 1</h3></div>
-              <div class="speaker-chip" id="speaker-chip">Narrator</div>
-            </div>
-
-            <div id="text-display" class="text-display" tabindex="0">
-              <p id="current-text">The current passage will appear here.</p>
-            </div>
-
-            <div class="transport-card">
-              <div class="progress-wrap">
-                <div id="progress-bar" class="progress-bar" role="slider" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" tabindex="0">
-                  <div id="progress-buffer" class="progress-buffer"></div>
-                  <div id="progress-fill" class="progress-fill"></div>
-                  <div id="progress-thumb" class="progress-thumb"></div>
-                </div>
-                <div class="progress-meta">
-                  <span id="progress-label">0%</span>
-                  <span id="remaining-time">~0 min left</span>
-                </div>
-              </div>
-
-              <div class="transport-controls">
-                <button id="rewind-btn" class="transport-btn" type="button" aria-label="Rewind 15 seconds"><span class="transport-icon">↶</span><span>15</span></button>
-                <button id="play-pause-btn" class="play-btn" type="button" aria-label="Play"><span id="play-icon">▶</span></button>
-                <button id="forward-btn" class="transport-btn" type="button" aria-label="Forward 15 seconds"><span class="transport-icon">↷</span><span>15</span></button>
-              </div>
-            </div>
+            <div class="panel-heading reading-heading"><div><h3 id="current-location">Page 1</h3></div><div class="speaker-chip" id="speaker-chip">Narrator</div></div>
+            <div id="text-display" class="text-display" tabindex="0"><p id="current-text">The current passage will appear here.</p></div>
+            <div class="transport-card"><div class="progress-wrap"><div id="progress-bar" class="progress-bar" role="slider" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" tabindex="0"><div id="progress-buffer" class="progress-buffer"></div><div id="progress-fill" class="progress-fill"></div><div id="progress-thumb" class="progress-thumb"></div></div><div class="progress-meta"><span id="progress-label">0%</span><span id="remaining-time">~0 min left</span></div></div><div class="transport-controls"><button id="rewind-btn" class="transport-btn" type="button" aria-label="Rewind 15 seconds"><span class="transport-icon">↶</span><span>15</span></button><button id="play-pause-btn" class="play-btn" type="button" aria-label="Play"><span id="play-icon">▶</span></button><button id="forward-btn" class="transport-btn" type="button" aria-label="Forward 15 seconds"><span class="transport-icon">↷</span><span>15</span></button></div></div>
           </section>
         </div>
 
         <section class="controls-grid">
-          <article class="control-card">
-            <div class="card-heading"><div><h3>Playback</h3></div></div>
-            <label class="control-row" for="speed-control"><span>Speed</span><input id="speed-control" type="range" min="0.65" max="2" step="0.05" value="1"><strong id="speed-value">1.00×</strong></label>
-            <label class="control-row" for="pitch-control"><span>Pitch</span><input id="pitch-control" type="range" min="0.8" max="1.2" step="0.05" value="1"><strong id="pitch-value">1.00</strong></label>
-            <label class="control-row" for="volume-control"><span>Volume</span><input id="volume-control" type="range" min="0.1" max="1" step="0.05" value="1"><strong id="volume-value">100%</strong></label>
-            <label class="control-row" for="font-size-control"><span>Text size</span><input id="font-size-control" type="range" min="16" max="30" step="1" value="21"><strong id="font-size-value">21px</strong></label>
-            <label class="select-row" for="sleep-timer"><span>Sleep timer</span><select id="sleep-timer"><option value="0">Off</option><option value="15">15 minutes</option><option value="30">30 minutes</option><option value="45">45 minutes</option><option value="60">60 minutes</option></select></label>
-          </article>
-
-          <article class="control-card">
-            <div class="card-heading"><div><h3>Voices</h3></div><button id="preview-voices" class="mini-btn" type="button">Preview</button></div>
-            <label class="select-row" for="voice-select"><span>Narrator</span><select id="voice-select"></select></label>
-            <label class="select-row" for="dialogue-voice-select"><span>Dialogue</span><select id="dialogue-voice-select"></select></label>
-            <label class="toggle-row" for="smart-voices"><span><strong>Character voices</strong><small>Changes voices when dialogue is detected.</small></span><input id="smart-voices" type="checkbox" checked></label>
-            <label class="toggle-row" for="prefer-natural-voices"><span><strong>Prefer natural voices</strong><small>Uses better device voices first when available.</small></span><input id="prefer-natural-voices" type="checkbox" checked></label>
-          </article>
-
-          <article class="control-card cast-card">
-            <div class="card-heading"><div><h3>Characters</h3></div><span id="cast-count" class="count-badge">0</span></div>
-            <p class="card-help">If a character gets the wrong voice, choose another one here.</p>
-            <div id="cast-list" class="cast-list"><div class="empty-cast">No named speakers detected yet.</div></div>
-          </article>
+          <article class="control-card"><div class="card-heading"><div><h3>Playback</h3></div></div><label class="control-row" for="speed-control"><span>Speed</span><input id="speed-control" type="range" min="0.65" max="2" step="0.05" value="1"><strong id="speed-value">1.00×</strong></label><label class="control-row" for="pitch-control"><span>Pitch</span><input id="pitch-control" type="range" min="0.8" max="1.2" step="0.05" value="1"><strong id="pitch-value">1.00</strong></label><label class="control-row" for="volume-control"><span>Volume</span><input id="volume-control" type="range" min="0.1" max="1" step="0.05" value="1"><strong id="volume-value">100%</strong></label><label class="control-row" for="font-size-control"><span>Text size</span><input id="font-size-control" type="range" min="16" max="30" step="1" value="21"><strong id="font-size-value">21px</strong></label><label class="select-row" for="sleep-timer"><span>Sleep timer</span><select id="sleep-timer"><option value="0">Off</option><option value="15">15 minutes</option><option value="30">30 minutes</option><option value="45">45 minutes</option><option value="60">60 minutes</option></select></label></article>
+          <article class="control-card"><div class="card-heading"><div><h3>Voices</h3></div><button id="preview-voices" class="mini-btn" type="button">Preview</button></div><label class="select-row" for="voice-select"><span>Narrator</span><select id="voice-select"></select></label><label class="select-row" for="dialogue-voice-select"><span>Dialogue</span><select id="dialogue-voice-select"></select></label><label class="toggle-row" for="smart-voices"><span><strong>Character voices</strong><small>Changes voices when dialogue is detected.</small></span><input id="smart-voices" type="checkbox" checked></label><label class="toggle-row" for="prefer-natural-voices"><span><strong>Prefer natural voices</strong><small>Uses better device voices first when available.</small></span><input id="prefer-natural-voices" type="checkbox" checked></label></article>
+          <article class="control-card cast-card"><div class="card-heading"><div><h3>Characters</h3></div><span id="cast-count" class="count-badge">0</span></div><p class="card-help">If a character gets the wrong voice, choose another one here.</p><div id="cast-list" class="cast-list"><div class="empty-cast">No named speakers detected yet.</div></div></article>
         </section>
       </section>
     </main>
   </div>
 
-  <div id="loading-overlay" class="loading-overlay hidden" role="status" aria-live="assertive">
-    <div class="loader-card">
-      <div class="loader-ring"></div>
-      <h2 id="loading-title">Opening your book</h2>
-      <p id="loading-message">Reading the PDF…</p>
-      <div class="loading-progress"><div id="loading-fill"></div></div>
-      <span id="loading-percent">0%</span>
-    </div>
-  </div>
-
+  <div id="loading-overlay" class="loading-overlay hidden" role="status" aria-live="assertive"><div class="loader-card"><div class="loader-ring"></div><h2 id="loading-title">Opening your book</h2><p id="loading-message">Reading the PDF…</p><div class="loading-progress"><div id="loading-fill"></div></div><span id="loading-percent">0%</span></div></div>
   <div id="toast" class="toast hidden" role="status"></div>
   <script src="app.js?v=20260816-3"></script>
   <script src="hotfix.js?v=20260816-3"></script>
