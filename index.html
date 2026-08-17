@@ -8,8 +8,8 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <title>PDF Story Reader</title>
   <link rel="preconnect" href="https://cdnjs.cloudflare.com">
+  <link rel="preconnect" href="https://cdn.jsdelivr.net">
   <link rel="stylesheet" href="styles.css">
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js" crossorigin="anonymous"></script>
 </head>
 <body>
   <div class="app-shell">
@@ -22,7 +22,6 @@
         </div>
       </div>
       <div class="topbar-actions">
-        <span class="privacy-pill">Runs on this device</span>
         <button id="change-book" class="ghost-btn hidden" type="button">Change book</button>
       </div>
     </header>
@@ -31,21 +30,31 @@
       <section id="upload-section" class="upload-section">
         <div class="hero-copy">
           <h2>Choose a PDF to start reading.</h2>
-          <p>Use the button below or drop a PDF into the box. Once it loads, press Play. Text-based PDFs work best.</p>
+          <p>Pick a PDF from your device. Once it finishes loading, press Play.</p>
         </div>
 
         <div id="drop-zone" class="upload-card" role="button" tabindex="0" aria-label="Upload a PDF">
           <div class="upload-glyph" aria-hidden="true"><span>PDF</span></div>
-          <div class="upload-copy"><h3>Upload your book</h3><p>Choose a PDF or drop it here.</p></div>
-          <div id="choose-file-btn" class="primary-btn" role="button" aria-label="Choose PDF" style="position:relative;display:inline-flex;align-items:center;justify-content:center;overflow:hidden;">
-            Choose PDF
-            <input id="file-input" type="file" accept="application/pdf,.pdf" aria-label="Choose PDF file" onclick="event.stopPropagation()" style="position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer;">
+          <div class="upload-copy">
+            <h3>Upload your book</h3>
+            <p>Choose a PDF or drop it here.</p>
           </div>
-          <p class="upload-note">If a PDF is made only of scanned images, it may need OCR first.</p>
+
+          <label id="choose-file-btn" class="primary-btn" for="file-input">Choose PDF</label>
+          <input
+            id="file-input"
+            type="file"
+            accept=".pdf,application/pdf"
+            aria-label="Choose PDF file"
+            style="position:fixed;left:-10000px;top:auto;width:1px;height:1px;opacity:0;overflow:hidden;"
+          >
+
+          <p id="upload-status" class="upload-note" role="status" aria-live="polite">Choose a PDF to begin.</p>
+          <p class="upload-note">Text PDFs can be narrated. Scanned-image PDFs can still open in the page viewer but may not have readable text.</p>
         </div>
 
         <div class="feature-row" aria-label="Directions">
-          <article><strong>1. Upload</strong><span>Choose your PDF and wait for it to finish loading.</span></article>
+          <article><strong>1. Upload</strong><span>Choose your PDF and wait for the loading screen to finish.</span></article>
           <article><strong>2. Read</strong><span>Press Play. Use the 15-second buttons to move backward or forward.</span></article>
           <article><strong>3. Browse</strong><span>Flip through pages while it reads, or tap Read this page to jump there.</span></article>
         </div>
@@ -55,7 +64,11 @@
         <div class="book-toolbar">
           <div class="book-meta">
             <h2 id="book-name">Book title</h2>
-            <div class="book-stats"><span id="book-pages">0 pages</span><span id="book-words">0 words</span><span id="book-time">0 min</span></div>
+            <div class="book-stats">
+              <span id="book-pages">0 pages</span>
+              <span id="book-words">0 words</span>
+              <span id="book-time">0 min</span>
+            </div>
           </div>
           <div class="toolbar-actions">
             <button id="jump-viewer-to-audio" class="ghost-btn" type="button">Go to reading page</button>
@@ -67,17 +80,30 @@
           <section class="panel page-panel" aria-label="PDF page viewer">
             <div class="panel-heading">
               <div><h3>Page viewer</h3></div>
-              <label class="switch-line" for="follow-narration"><input id="follow-narration" type="checkbox" checked><span>Follow reading</span></label>
+              <label class="switch-line" for="follow-narration">
+                <input id="follow-narration" type="checkbox" checked>
+                <span>Follow reading</span>
+              </label>
             </div>
+
             <div class="page-stage" id="page-stage">
               <canvas id="pdf-canvas" aria-label="Rendered PDF page"></canvas>
               <div id="page-render-status" class="page-render-status hidden">Loading page…</div>
             </div>
+
             <div class="page-controls">
               <button id="prev-page" class="icon-btn" type="button" aria-label="Previous page">‹</button>
-              <div class="page-number-control"><label for="page-number">Page</label><input id="page-number" type="number" min="1" value="1" inputmode="numeric"><span id="page-count">/ 0</span></div>
+              <div class="page-number-control">
+                <label for="page-number">Page</label>
+                <input id="page-number" type="number" min="1" value="1" inputmode="numeric">
+                <span id="page-count">/ 0</span>
+              </div>
               <button id="next-page" class="icon-btn" type="button" aria-label="Next page">›</button>
-              <label class="zoom-control" for="page-zoom"><span>Zoom</span><input id="page-zoom" type="range" min="70" max="180" step="10" value="110"><strong id="page-zoom-value">110%</strong></label>
+              <label class="zoom-control" for="page-zoom">
+                <span>Zoom</span>
+                <input id="page-zoom" type="range" min="70" max="180" step="10" value="110">
+                <strong id="page-zoom-value">110%</strong>
+              </label>
             </div>
           </section>
 
@@ -86,14 +112,24 @@
               <div><h3 id="current-location">Page 1</h3></div>
               <div class="speaker-chip" id="speaker-chip">Narrator</div>
             </div>
-            <div id="text-display" class="text-display" tabindex="0"><p id="current-text">The current passage will appear here.</p></div>
+
+            <div id="text-display" class="text-display" tabindex="0">
+              <p id="current-text">The current passage will appear here.</p>
+            </div>
+
             <div class="transport-card">
               <div class="progress-wrap">
                 <div id="progress-bar" class="progress-bar" role="slider" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" tabindex="0">
-                  <div id="progress-buffer" class="progress-buffer"></div><div id="progress-fill" class="progress-fill"></div><div id="progress-thumb" class="progress-thumb"></div>
+                  <div id="progress-buffer" class="progress-buffer"></div>
+                  <div id="progress-fill" class="progress-fill"></div>
+                  <div id="progress-thumb" class="progress-thumb"></div>
                 </div>
-                <div class="progress-meta"><span id="progress-label">0%</span><span id="remaining-time">~0 min left</span></div>
+                <div class="progress-meta">
+                  <span id="progress-label">0%</span>
+                  <span id="remaining-time">~0 min left</span>
+                </div>
               </div>
+
               <div class="transport-controls">
                 <button id="rewind-btn" class="transport-btn" type="button" aria-label="Rewind 15 seconds"><span class="transport-icon">↶</span><span>15</span></button>
                 <button id="play-pause-btn" class="play-btn" type="button" aria-label="Play"><span id="play-icon">▶</span></button>
@@ -132,9 +168,17 @@
   </div>
 
   <div id="loading-overlay" class="loading-overlay hidden" role="status" aria-live="assertive">
-    <div class="loader-card"><div class="loader-ring"></div><h2 id="loading-title">Opening your book</h2><p id="loading-message">Reading the PDF…</p><div class="loading-progress"><div id="loading-fill"></div></div><span id="loading-percent">0%</span></div>
+    <div class="loader-card">
+      <div class="loader-ring"></div>
+      <h2 id="loading-title">Opening your book</h2>
+      <p id="loading-message">Reading the PDF…</p>
+      <div class="loading-progress"><div id="loading-fill"></div></div>
+      <span id="loading-percent">0%</span>
+    </div>
   </div>
+
   <div id="toast" class="toast hidden" role="status"></div>
-  <script src="app.js"></script>
+  <script src="app.js?v=20260816-3"></script>
+  <script src="hotfix.js?v=20260816-3"></script>
 </body>
 </html>
