@@ -18,11 +18,11 @@
         <div class="brand-mark" aria-hidden="true">SR</div>
         <div>
           <h1>PDF Story Reader</h1>
-          <p>Turn a text PDF into a casted audiobook.</p>
+          <p>Upload a PDF and press play.</p>
         </div>
       </div>
       <div class="topbar-actions">
-        <span class="privacy-pill">On-device reading</span>
+        <span class="privacy-pill">Runs on this device</span>
         <button id="change-book" class="ghost-btn hidden" type="button">Change book</button>
       </div>
     </header>
@@ -30,35 +30,35 @@
     <main>
       <section id="upload-section" class="upload-section">
         <div class="hero-copy">
-          <span class="eyebrow">Audiobook studio</span>
-          <h2>Your PDF, read with pacing, character voices, and a page you can actually follow.</h2>
-          <p>Upload a text-based PDF. The reader extracts the book, detects quoted dialogue and likely speakers, then lets you tune narration without sending the file to a server.</p>
+          <h2>Choose a PDF to start reading.</h2>
+          <p>Use the button below or drop a PDF into the box. Once it loads, press Play. Text-based PDFs work best.</p>
         </div>
 
         <div id="drop-zone" class="upload-card" role="button" tabindex="0" aria-label="Upload a PDF">
           <div class="upload-glyph" aria-hidden="true"><span>PDF</span></div>
-          <div class="upload-copy"><h3>Drop a book here</h3><p>or choose a PDF from your device</p></div>
-          <button id="choose-file-btn" class="primary-btn" type="button">Choose PDF</button>
-          <input id="file-input" type="file" accept="application/pdf,.pdf" hidden>
-          <p class="upload-note">Text PDFs work best. Scanned books need OCR before this reader can narrate them.</p>
+          <div class="upload-copy"><h3>Upload your book</h3><p>Choose a PDF or drop it here.</p></div>
+          <div id="choose-file-btn" class="primary-btn" role="button" aria-label="Choose PDF" style="position:relative;display:inline-flex;align-items:center;justify-content:center;overflow:hidden;">
+            Choose PDF
+            <input id="file-input" type="file" accept="application/pdf,.pdf" aria-label="Choose PDF file" onclick="event.stopPropagation()" style="position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer;">
+          </div>
+          <p class="upload-note">If a PDF is made only of scanned images, it may need OCR first.</p>
         </div>
 
-        <div class="feature-row" aria-label="Reader highlights">
-          <article><strong>Smart cast</strong><span>Detects dialogue and remembers likely speakers.</span></article>
-          <article><strong>Page viewer</strong><span>Flip through the PDF while narration keeps playing.</span></article>
-          <article><strong>Fine controls</strong><span>Voice, speed, pitch, volume, font size, and sleep timer.</span></article>
+        <div class="feature-row" aria-label="Directions">
+          <article><strong>1. Upload</strong><span>Choose your PDF and wait for it to finish loading.</span></article>
+          <article><strong>2. Read</strong><span>Press Play. Use the 15-second buttons to move backward or forward.</span></article>
+          <article><strong>3. Browse</strong><span>Flip through pages while it reads, or tap Read this page to jump there.</span></article>
         </div>
       </section>
 
       <section id="reader-section" class="reader-section hidden" aria-live="polite">
         <div class="book-toolbar">
           <div class="book-meta">
-            <span class="eyebrow">Now loaded</span>
             <h2 id="book-name">Book title</h2>
             <div class="book-stats"><span id="book-pages">0 pages</span><span id="book-words">0 words</span><span id="book-time">0 min</span></div>
           </div>
           <div class="toolbar-actions">
-            <button id="jump-viewer-to-audio" class="ghost-btn" type="button">Follow narration</button>
+            <button id="jump-viewer-to-audio" class="ghost-btn" type="button">Go to reading page</button>
             <button id="read-viewed-page" class="ghost-btn" type="button">Read this page</button>
           </div>
         </div>
@@ -66,12 +66,12 @@
         <div class="workspace-grid">
           <section class="panel page-panel" aria-label="PDF page viewer">
             <div class="panel-heading">
-              <div><span class="panel-kicker">Page viewer</span><h3>Browse while it reads</h3></div>
-              <label class="switch-line" for="follow-narration"><input id="follow-narration" type="checkbox" checked><span>Follow audio</span></label>
+              <div><h3>Page viewer</h3></div>
+              <label class="switch-line" for="follow-narration"><input id="follow-narration" type="checkbox" checked><span>Follow reading</span></label>
             </div>
             <div class="page-stage" id="page-stage">
               <canvas id="pdf-canvas" aria-label="Rendered PDF page"></canvas>
-              <div id="page-render-status" class="page-render-status hidden">Rendering page…</div>
+              <div id="page-render-status" class="page-render-status hidden">Loading page…</div>
             </div>
             <div class="page-controls">
               <button id="prev-page" class="icon-btn" type="button" aria-label="Previous page">‹</button>
@@ -81,12 +81,12 @@
             </div>
           </section>
 
-          <section class="panel reading-panel" aria-label="Narration text and controls">
+          <section class="panel reading-panel" aria-label="Reading text and playback controls">
             <div class="panel-heading reading-heading">
-              <div><span class="panel-kicker">Narration</span><h3 id="current-location">Page 1</h3></div>
+              <div><h3 id="current-location">Page 1</h3></div>
               <div class="speaker-chip" id="speaker-chip">Narrator</div>
             </div>
-            <div id="text-display" class="text-display" tabindex="0"><p id="current-text">Your current passage will appear here.</p></div>
+            <div id="text-display" class="text-display" tabindex="0"><p id="current-text">The current passage will appear here.</p></div>
             <div class="transport-card">
               <div class="progress-wrap">
                 <div id="progress-bar" class="progress-bar" role="slider" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" tabindex="0">
@@ -105,7 +105,7 @@
 
         <section class="controls-grid">
           <article class="control-card">
-            <div class="card-heading"><div><span class="panel-kicker">Performance</span><h3>Sound & pacing</h3></div></div>
+            <div class="card-heading"><div><h3>Playback</h3></div></div>
             <label class="control-row" for="speed-control"><span>Speed</span><input id="speed-control" type="range" min="0.65" max="2" step="0.05" value="1"><strong id="speed-value">1.00×</strong></label>
             <label class="control-row" for="pitch-control"><span>Pitch</span><input id="pitch-control" type="range" min="0.8" max="1.2" step="0.05" value="1"><strong id="pitch-value">1.00</strong></label>
             <label class="control-row" for="volume-control"><span>Volume</span><input id="volume-control" type="range" min="0.1" max="1" step="0.05" value="1"><strong id="volume-value">100%</strong></label>
@@ -114,16 +114,16 @@
           </article>
 
           <article class="control-card">
-            <div class="card-heading"><div><span class="panel-kicker">Voices</span><h3>Narrator & dialogue</h3></div><button id="preview-voices" class="mini-btn" type="button">Preview</button></div>
+            <div class="card-heading"><div><h3>Voices</h3></div><button id="preview-voices" class="mini-btn" type="button">Preview</button></div>
             <label class="select-row" for="voice-select"><span>Narrator</span><select id="voice-select"></select></label>
-            <label class="select-row" for="dialogue-voice-select"><span>Dialogue fallback</span><select id="dialogue-voice-select"></select></label>
-            <label class="toggle-row" for="smart-voices"><span><strong>Smart cast</strong><small>Switch voices inside a passage when dialogue is detected.</small></span><input id="smart-voices" type="checkbox" checked></label>
-            <label class="toggle-row" for="prefer-natural-voices"><span><strong>Prefer natural voices</strong><small>Ranks premium, enhanced, and higher-quality device voices first.</small></span><input id="prefer-natural-voices" type="checkbox" checked></label>
+            <label class="select-row" for="dialogue-voice-select"><span>Dialogue</span><select id="dialogue-voice-select"></select></label>
+            <label class="toggle-row" for="smart-voices"><span><strong>Character voices</strong><small>Changes voices when dialogue is detected.</small></span><input id="smart-voices" type="checkbox" checked></label>
+            <label class="toggle-row" for="prefer-natural-voices"><span><strong>Prefer natural voices</strong><small>Uses better device voices first when available.</small></span><input id="prefer-natural-voices" type="checkbox" checked></label>
           </article>
 
           <article class="control-card cast-card">
-            <div class="card-heading"><div><span class="panel-kicker">Cast</span><h3>Detected speakers</h3></div><span id="cast-count" class="count-badge">0</span></div>
-            <p class="card-help">Speaker detection is best-effort. Override any character voice if the automatic casting guesses wrong.</p>
+            <div class="card-heading"><div><h3>Characters</h3></div><span id="cast-count" class="count-badge">0</span></div>
+            <p class="card-help">If a character gets the wrong voice, choose another one here.</p>
             <div id="cast-list" class="cast-list"><div class="empty-cast">No named speakers detected yet.</div></div>
           </article>
         </section>
@@ -132,7 +132,7 @@
   </div>
 
   <div id="loading-overlay" class="loading-overlay hidden" role="status" aria-live="assertive">
-    <div class="loader-card"><div class="loader-ring"></div><h2 id="loading-title">Opening your book</h2><p id="loading-message">Reading the PDF and building narration…</p><div class="loading-progress"><div id="loading-fill"></div></div><span id="loading-percent">0%</span></div>
+    <div class="loader-card"><div class="loader-ring"></div><h2 id="loading-title">Opening your book</h2><p id="loading-message">Reading the PDF…</p><div class="loading-progress"><div id="loading-fill"></div></div><span id="loading-percent">0%</span></div>
   </div>
   <div id="toast" class="toast hidden" role="status"></div>
   <script src="app.js"></script>
