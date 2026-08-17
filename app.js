@@ -1,1165 +1,744 @@
-// PDF Story Reader - Text to Speech Application
-// Uses pdf.js for PDF extraction and Web Speech API for TTS
+const PDFJS_CDN = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+const SETTINGS_KEY = 'pdf-story-reader-v2-settings';
+const POSITION_KEY_PREFIX = 'pdf-story-reader-v2-position:';
+const MEDIA_SESSION_ARTWORK_URL = 'data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20100%20100%22%3E%3Crect%20width%3D%22100%22%20height%3D%22100%22%20rx%3D%2222%22%20fill%3D%22%238b7cff%22%2F%3E%3Ctext%20x%3D%2250%22%20y%3D%2261%22%20text-anchor%3D%22middle%22%20font-size%3D%2236%22%20font-family%3D%22Arial%22%20font-weight%3D%22700%22%20fill%3D%22white%22%3ESR%3C%2Ftext%3E%3C%2Fsvg%3E';
+const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 
-// Track if pdf.js has loaded
-let pdfJsLoaded = false;
-
-// Robust iOS/Safari detection for modern devices including iPhone 15
-const isIOS = (() => {
-    // Check for iOS via user agent
-    const iosUA = /iPad|iPhone|iPod/.test(navigator.userAgent);
-    // Check for iPad OS (reports as Mac with touch)
-    const iPadOS = navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1;
-    // Check via platform
-    const iosPlatform = /iPhone|iPad|iPod/.test(navigator.platform);
-    // Check for iOS-specific features
-    const hasIOSWebkit = 'webkitAudioContext' in window && 'ontouchstart' in window && !navigator.userAgent.includes('Android');
-    // Modern iOS detection via standalone mode support
-    const supportsStandalone = 'standalone' in navigator;
-    
-    return iosUA || iPadOS || iosPlatform || (hasIOSWebkit && supportsStandalone);
-})();
-
-const isSafari = (() => {
-    const ua = navigator.userAgent.toLowerCase();
-    // Safari but not Chrome, Edge, or other Chromium browsers
-    return ua.includes('safari') && !ua.includes('chrome') && !ua.includes('chromium') && !ua.includes('edg');
-})();
-
-const isIOSSafari = isIOS || (isSafari && 'ontouchstart' in window);
-
-// Debug logging for iOS detection
-console.log('Device detection:', { isIOS, isSafari, isIOSSafari, userAgent: navigator.userAgent });
-
-// Set up pdf.js worker when library is loaded
-function initPdfJs() {
-    if (typeof pdfjsLib !== 'undefined') {
-        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
-        pdfJsLoaded = true;
-        console.log('PDF.js loaded successfully');
-        return true;
-    }
-    return false;
+function clamp(value, min, max) { return Math.min(max, Math.max(min, value)); }
+function escapeHtml(value) {
+  return String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
 }
-
-// Constants for PDF.js loading
-const PDFJS_CHECK_INTERVAL_MS = 100;
-const PDFJS_MAX_WAIT_MS = 10000;
-
-// Media Session artwork - URL-encoded SVG for lock screen display
-const MEDIA_SESSION_ARTWORK_URL = 'data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20100%20100%22%3E%3Ctext%20y%3D%22.9em%22%20font-size%3D%2290%22%3E%F0%9F%93%9A%3C%2Ftext%3E%3C%2Fsvg%3E';
-
-// Background audio volume - 1% is low enough to be nearly inaudible but high enough
-// for iOS to recognize it as active audio content for Media Session API
-const BACKGROUND_AUDIO_VOLUME = 0.01;
-
-// Promise-based wait for PDF.js to load
-function waitForPdfJs(maxWaitMs = PDFJS_MAX_WAIT_MS) {
-    return new Promise((resolve, reject) => {
-        if (initPdfJs()) {
-            resolve(true);
-            return;
-        }
-        
-        const startTime = Date.now();
-        const checkInterval = setInterval(() => {
-            if (initPdfJs()) {
-                clearInterval(checkInterval);
-                resolve(true);
-            } else if (Date.now() - startTime > maxWaitMs) {
-                clearInterval(checkInterval);
-                reject(new Error('PDF library failed to load. Please check your internet connection and refresh the page.'));
-            }
-        }, PDFJS_CHECK_INTERVAL_MS);
-    });
+function normalizeSpaces(text) {
+  return text.replace(/[\u00a0\u2007\u202f]/g, ' ').replace(/[ \t]+/g, ' ').replace(/\s+([,.;:!?])/g, '$1').replace(/([“"'])\s+/g, '$1').replace(/\s+([”"'])/g, '$1').trim();
 }
-
-// Try to init pdf.js immediately, or start background loading
-if (!initPdfJs()) {
-    // Start background wait - don't block app initialization
-    waitForPdfJs().catch(err => {
-        console.error('PDF.js library failed to load:', err.message);
-    });
+function wordCount(text) {
+  const match = text.trim().match(/\b[\p{L}\p{N}’'-]+\b/gu);
+  return match ? match.length : 0;
 }
 
 class PDFStoryReader {
-    constructor() {
-        this.pdfDoc = null;
-        this.textContent = [];
-        this.paragraphs = [];
-        this.currentParagraphIndex = 0;
-        this.isPlaying = false;
-        this.speechSynthesis = window.speechSynthesis;
-        this.currentUtterance = null;
-        this.voices = [];
-        this.narratorVoice = null;
-        this.dialogueVoice = null;
-        this.speechRate = 1.0;
-        this.smartVoices = true;
-        this.currentSpeaker = null;
-        this.speakerVoices = new Map();
-        
-        // iOS Safari workaround: timer to prevent speech from getting stuck
-        this.iosSpeechTimer = null;
-        this.iosSpeechInitialized = false;
-        
-        // Background audio element for Media Session API (enables lock screen controls)
-        this.backgroundAudio = null;
-        this.mediaSessionSupported = 'mediaSession' in navigator;
-        
-        this.initElements();
-        this.initVoices();
-        this.initBackgroundAudio();
-        this.initMediaSession();
-        this.initEventListeners();
+  constructor() {
+    this.pdfDoc = null;
+    this.file = null;
+    this.fileKey = '';
+    this.pageTexts = [];
+    this.units = [];
+    this.currentUnitIndex = 0;
+    this.currentSegmentIndex = 0;
+    this.viewerPage = 1;
+    this.renderTask = null;
+    this.isPlaying = false;
+    this.sessionToken = 0;
+    this.speechSynthesis = window.speechSynthesis;
+    this.voices = [];
+    this.narratorVoice = null;
+    this.dialogueVoice = null;
+    this.speakerVoiceNames = new Map();
+    this.detectedSpeakers = [];
+    this.speechRate = 1;
+    this.speechPitch = 1;
+    this.speechVolume = 1;
+    this.smartVoices = true;
+    this.preferNaturalVoices = true;
+    this.followNarration = true;
+    this.pageZoom = 110;
+    this.readerFontSize = 21;
+    this.sleepTimerId = null;
+    this.backgroundAudio = null;
+    this.iosKeepAliveTimer = null;
+    this.toastTimer = null;
+    this.lastRenderedPage = null;
+    this.settings = this.loadSettings();
+    this.initPdfJs();
+    this.cacheElements();
+    this.applySavedSettings();
+    this.initVoices();
+    this.initBackgroundAudio();
+    this.initMediaSession();
+    this.bindEvents();
+  }
+
+  initPdfJs() {
+    if (typeof pdfjsLib !== 'undefined') pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_CDN;
+  }
+
+  cacheElements() {
+    const ids = [
+      'upload-section', 'reader-section', 'drop-zone', 'choose-file-btn', 'file-input', 'change-book',
+      'book-name', 'book-pages', 'book-words', 'book-time', 'jump-viewer-to-audio', 'read-viewed-page',
+      'follow-narration', 'pdf-canvas', 'page-render-status', 'prev-page', 'next-page', 'page-number', 'page-count',
+      'page-zoom', 'page-zoom-value', 'current-location', 'speaker-chip', 'text-display', 'current-text',
+      'progress-bar', 'progress-fill', 'progress-thumb', 'progress-label', 'remaining-time', 'rewind-btn',
+      'play-pause-btn', 'play-icon', 'forward-btn', 'speed-control', 'speed-value', 'pitch-control', 'pitch-value',
+      'volume-control', 'volume-value', 'font-size-control', 'font-size-value', 'sleep-timer', 'voice-select',
+      'dialogue-voice-select', 'smart-voices', 'prefer-natural-voices', 'preview-voices', 'cast-list', 'cast-count',
+      'loading-overlay', 'loading-title', 'loading-message', 'loading-fill', 'loading-percent', 'toast'
+    ];
+    ids.forEach(id => { this[id.replace(/-([a-z])/g, (_, c) => c.toUpperCase())] = document.getElementById(id); });
+    this.canvasContext = this.pdfCanvas.getContext('2d', { alpha: false });
+  }
+
+  loadSettings() {
+    try { return JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}'); } catch { return {}; }
+  }
+
+  saveSettings() {
+    const payload = {
+      speechRate: this.speechRate,
+      speechPitch: this.speechPitch,
+      speechVolume: this.speechVolume,
+      smartVoices: this.smartVoices,
+      preferNaturalVoices: this.preferNaturalVoices,
+      followNarration: this.followNarration,
+      pageZoom: this.pageZoom,
+      readerFontSize: this.readerFontSize,
+      narratorVoiceName: this.narratorVoice?.name || '',
+      dialogueVoiceName: this.dialogueVoice?.name || ''
+    };
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(payload));
+  }
+
+  applySavedSettings() {
+    this.speechRate = Number(this.settings.speechRate) || 1;
+    this.speechPitch = Number(this.settings.speechPitch) || 1;
+    this.speechVolume = Number(this.settings.speechVolume) || 1;
+    this.smartVoices = this.settings.smartVoices !== false;
+    this.preferNaturalVoices = this.settings.preferNaturalVoices !== false;
+    this.followNarration = this.settings.followNarration !== false;
+    this.pageZoom = Number(this.settings.pageZoom) || 110;
+    this.readerFontSize = Number(this.settings.readerFontSize) || 21;
+    this.speedControl.value = this.speechRate;
+    this.pitchControl.value = this.speechPitch;
+    this.volumeControl.value = this.speechVolume;
+    this.smartVoices.checked = this.smartVoices;
+    this.preferNaturalVoices.checked = this.preferNaturalVoices;
+    this.followNarration.checked = this.followNarration;
+    this.pageZoom.value = this.pageZoom;
+    this.fontSizeControl.value = this.readerFontSize;
+    this.updateSettingLabels();
+  }
+
+  updateSettingLabels() {
+    this.speedValue.textContent = `${this.speechRate.toFixed(2)}×`;
+    this.pitchValue.textContent = this.speechPitch.toFixed(2);
+    this.volumeValue.textContent = `${Math.round(this.speechVolume * 100)}%`;
+    this.fontSizeValue.textContent = `${this.readerFontSize}px`;
+    this.pageZoomValue.textContent = `${this.pageZoom}%`;
+    document.documentElement.style.setProperty('--reader-font-size', `${this.readerFontSize}px`);
+  }
+
+  bindEvents() {
+    const openPicker = event => { event?.stopPropagation(); this.fileInput.click(); };
+    this.chooseFileBtn.addEventListener('click', openPicker);
+    this.dropZone.addEventListener('click', openPicker);
+    this.dropZone.addEventListener('keydown', event => {
+      if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openPicker(event); }
+    });
+    this.fileInput.addEventListener('change', event => this.processFile(event.target.files?.[0]));
+    ['dragenter', 'dragover'].forEach(type => this.dropZone.addEventListener(type, event => { event.preventDefault(); this.dropZone.classList.add('dragover'); }));
+    ['dragleave', 'drop'].forEach(type => this.dropZone.addEventListener(type, event => { event.preventDefault(); this.dropZone.classList.remove('dragover'); }));
+    this.dropZone.addEventListener('drop', event => this.processFile(event.dataTransfer?.files?.[0]));
+    document.addEventListener('dragover', event => event.preventDefault());
+    document.addEventListener('drop', event => event.preventDefault());
+
+    this.changeBook.addEventListener('click', () => this.resetReader());
+    this.playPauseBtn.addEventListener('click', () => this.togglePlayPause());
+    this.rewindBtn.addEventListener('click', () => this.seekBySeconds(-15));
+    this.forwardBtn.addEventListener('click', () => this.seekBySeconds(15));
+    this.prevPage.addEventListener('click', () => this.browsePage(this.viewerPage - 1));
+    this.nextPage.addEventListener('click', () => this.browsePage(this.viewerPage + 1));
+    this.pageNumber.addEventListener('change', () => this.browsePage(Number(this.pageNumber.value)));
+    this.pageNumber.addEventListener('keydown', event => { if (event.key === 'Enter') this.browsePage(Number(this.pageNumber.value)); });
+    this.pageZoom.addEventListener('input', () => {
+      this.pageZoom = Number(this.pageZoom.value); this.updateSettingLabels(); this.saveSettings(); this.renderPage(this.viewerPage, true);
+    });
+    this.followNarration.addEventListener('change', () => {
+      this.followNarration = this.followNarration.checked;
+      this.saveSettings();
+      if (this.followNarration && this.units.length) { this.viewerPage = this.units[this.currentUnitIndex].page; this.renderPage(this.viewerPage, true); }
+    });
+    this.jumpViewerToAudio.addEventListener('click', () => {
+      if (!this.units.length) return;
+      this.followNarration = true; this.followNarration.checked = true; this.viewerPage = this.units[this.currentUnitIndex].page; this.renderPage(this.viewerPage, true); this.saveSettings();
+    });
+    this.readViewedPage.addEventListener('click', () => this.jumpAudioToPage(this.viewerPage));
+
+    this.speedControl.addEventListener('input', () => {
+      this.speechRate = Number(this.speedControl.value); this.updateSettingLabels(); this.saveSettings(); if (this.isPlaying) this.restartCurrentSegment(); this.updateProgressMeta();
+    });
+    this.pitchControl.addEventListener('input', () => {
+      this.speechPitch = Number(this.pitchControl.value); this.updateSettingLabels(); this.saveSettings(); if (this.isPlaying) this.restartCurrentSegment();
+    });
+    this.volumeControl.addEventListener('input', () => {
+      this.speechVolume = Number(this.volumeControl.value); this.updateSettingLabels(); this.saveSettings(); if (this.isPlaying) this.restartCurrentSegment();
+    });
+    this.fontSizeControl.addEventListener('input', () => {
+      this.readerFontSize = Number(this.fontSizeControl.value); this.updateSettingLabels(); this.saveSettings();
+    });
+    this.smartVoices.addEventListener('change', () => {
+      this.smartVoices = this.smartVoices.checked; this.saveSettings(); if (this.isPlaying) this.restartCurrentSegment();
+    });
+    this.preferNaturalVoices.addEventListener('change', () => {
+      this.preferNaturalVoices = this.preferNaturalVoices.checked; this.saveSettings(); this.populateVoiceSelects(true); this.renderCastList(); if (this.isPlaying) this.restartCurrentSegment();
+    });
+    this.voiceSelect.addEventListener('change', () => {
+      this.narratorVoice = this.voices.find(v => v.name === this.voiceSelect.value) || this.narratorVoice; this.saveSettings(); if (this.isPlaying) this.restartCurrentSegment();
+    });
+    this.dialogueVoiceSelect.addEventListener('change', () => {
+      this.dialogueVoice = this.voices.find(v => v.name === this.dialogueVoiceSelect.value) || this.dialogueVoice; this.saveSettings(); if (this.isPlaying) this.restartCurrentSegment();
+    });
+    this.previewVoices.addEventListener('click', () => this.previewSelectedVoices());
+    this.sleepTimer.addEventListener('change', () => this.configureSleepTimer(Number(this.sleepTimer.value)));
+    this.progressBar.addEventListener('pointerdown', event => this.seekFromProgressEvent(event));
+    this.progressBar.addEventListener('keydown', event => {
+      if (!this.units.length) return;
+      if (event.key === 'ArrowLeft') this.seekBySeconds(-15);
+      if (event.key === 'ArrowRight') this.seekBySeconds(15);
+    });
+    document.addEventListener('visibilitychange', () => { if (!document.hidden && this.isPlaying) this.updateDisplay(); });
+  }
+
+  initVoices() {
+    const refresh = () => {
+      const voices = this.speechSynthesis.getVoices();
+      if (!voices.length) return;
+      this.voices = voices; this.populateVoiceSelects(false); this.renderCastList();
+    };
+    refresh();
+    if ('onvoiceschanged' in this.speechSynthesis) this.speechSynthesis.onvoiceschanged = refresh;
+    let attempts = 0;
+    const timer = setInterval(() => { attempts += 1; refresh(); if (this.voices.length || attempts > 20) clearInterval(timer); }, 250);
+  }
+
+  voiceScore(voice) {
+    const name = `${voice.name} ${voice.voiceURI}`.toLowerCase();
+    let score = 0;
+    if (/premium|enhanced|natural|neural|studio|eloquence/.test(name)) score += 100;
+    if (/ava|samantha|serena|daniel|alex|allison|arthur|zoe|jamie|joelle|reed|nicky|evan/.test(name)) score += 35;
+    if (voice.localService) score += 8;
+    if (/en-us|en-gb|en-au|en-ca/.test(voice.lang.toLowerCase())) score += 12;
+    return score;
+  }
+
+  getSortedVoices() {
+    const english = this.voices.filter(voice => voice.lang.toLowerCase().startsWith('en'));
+    const others = this.voices.filter(voice => !voice.lang.toLowerCase().startsWith('en'));
+    const sorter = (a, b) => this.preferNaturalVoices ? this.voiceScore(b) - this.voiceScore(a) || a.name.localeCompare(b.name) : a.name.localeCompare(b.name);
+    return [...english.sort(sorter), ...others.sort(sorter)];
+  }
+
+  populateVoiceSelects(preserveCurrent = true) {
+    if (!this.voices.length) return;
+    const sorted = this.getSortedVoices();
+    const previousNarrator = preserveCurrent ? (this.narratorVoice?.name || this.settings.narratorVoiceName) : this.settings.narratorVoiceName;
+    const previousDialogue = preserveCurrent ? (this.dialogueVoice?.name || this.settings.dialogueVoiceName) : this.settings.dialogueVoiceName;
+    const fill = select => {
+      select.innerHTML = '';
+      sorted.forEach(voice => {
+        const option = document.createElement('option');
+        const quality = this.voiceScore(voice) >= 70 ? ' • natural' : '';
+        option.value = voice.name; option.textContent = `${voice.name} (${voice.lang})${quality}`; select.appendChild(option);
+      });
+    };
+    fill(this.voiceSelect); fill(this.dialogueVoiceSelect);
+    const narrator = sorted.find(v => v.name === previousNarrator) || sorted[0];
+    const dialogue = sorted.find(v => v.name === previousDialogue) || sorted.find(v => v.name !== narrator?.name) || sorted[0];
+    this.narratorVoice = narrator || null; this.dialogueVoice = dialogue || narrator || null;
+    if (this.narratorVoice) this.voiceSelect.value = this.narratorVoice.name;
+    if (this.dialogueVoice) this.dialogueVoiceSelect.value = this.dialogueVoice.name;
+  }
+
+  async processFile(file) {
+    if (!file) return;
+    const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+    if (!isPdf) { this.showToast('That file is not a PDF.'); return; }
+    if (file.size > 100 * 1024 * 1024) { this.showToast('This reader currently caps PDFs at 100 MB.'); return; }
+    await this.loadPDF(file);
+  }
+
+  async loadPDF(file) {
+    this.showLoading(true, 'Opening your book', 'Reading the PDF and building narration…', 3);
+    try {
+      this.initPdfJs();
+      if (typeof pdfjsLib === 'undefined') throw new Error('PDF.js did not load. Refresh and try again.');
+      this.pause(false);
+      this.file = file;
+      this.fileKey = `${file.name}|${file.size}|${file.lastModified}`;
+      const arrayBuffer = await file.arrayBuffer();
+      this.pdfDoc = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+      this.pageCount.textContent = `/ ${this.pdfDoc.numPages}`;
+      this.pageNumber.max = String(this.pdfDoc.numPages);
+      this.bookName.textContent = file.name.replace(/\.pdf$/i, '');
+      this.bookPages.textContent = `${this.pdfDoc.numPages.toLocaleString()} pages`;
+      await this.extractBook();
+      if (!this.units.length) throw new Error('I could not find readable text in this PDF. It may be scanned images instead of selectable text.');
+      this.detectedSpeakers = this.collectDetectedSpeakers();
+      this.assignDefaultCharacterVoices();
+      this.renderCastList();
+      this.updateBookStats();
+      this.restoreBookPosition();
+      this.viewerPage = this.units[this.currentUnitIndex]?.page || 1;
+      this.followNarration = true; this.followNarration.checked = true;
+      this.uploadSection.classList.add('hidden');
+      this.readerSection.classList.remove('hidden');
+      this.changeBook.classList.remove('hidden');
+      await this.renderPage(this.viewerPage, true);
+      this.updateDisplay();
+      this.updateMediaSessionMetadata();
+      this.showToast('Book ready. Smart cast is active.');
+    } catch (error) {
+      console.error(error); this.showToast(error.message || 'Could not open that PDF.');
+    } finally { this.showLoading(false); }
+  }
+
+  async extractBook() {
+    this.pageTexts = []; this.units = [];
+    const total = this.pdfDoc.numPages;
+    const context = { recentSpeakers: [], lastDialogueSpeaker: null };
+    for (let pageNumber = 1; pageNumber <= total; pageNumber += 1) {
+      const percent = 5 + Math.round((pageNumber / total) * 77);
+      this.showLoading(true, 'Reading your book', `Extracting page ${pageNumber} of ${total}…`, percent);
+      const page = await this.pdfDoc.getPage(pageNumber);
+      const textContent = await page.getTextContent();
+      const pageText = this.buildPageText(textContent.items);
+      this.pageTexts.push(pageText);
+      this.buildUnitsForPage(pageText, pageNumber, context);
+      if (pageNumber % 8 === 0) await new Promise(resolve => setTimeout(resolve, 0));
     }
+    this.showLoading(true, 'Casting voices', 'Finding dialogue and likely speakers…', 90);
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
 
-    initElements() {
-        // Upload elements
-        this.uploadSection = document.getElementById('upload-section');
-        this.readerSection = document.getElementById('reader-section');
-        this.dropZone = document.getElementById('drop-zone');
-        this.fileInput = document.getElementById('file-input');
-        this.loadingOverlay = document.getElementById('loading-overlay');
-
-        // Reader elements
-        this.bookName = document.getElementById('book-name');
-        this.changeBookBtn = document.getElementById('change-book');
-        this.progressFill = document.getElementById('progress-fill');
-        this.currentPosition = document.getElementById('current-position');
-        this.totalPages = document.getElementById('total-pages');
-        this.textDisplay = document.getElementById('text-display');
-        this.currentText = document.getElementById('current-text');
-
-        // Control elements
-        this.playPauseBtn = document.getElementById('play-pause-btn');
-        this.playIcon = document.getElementById('play-icon');
-        this.playLabel = document.getElementById('play-label');
-        this.rewindBtn = document.getElementById('rewind-btn');
-        this.forwardBtn = document.getElementById('forward-btn');
-
-        // Settings elements
-        this.speedControl = document.getElementById('speed-control');
-        this.speedValue = document.getElementById('speed-value');
-        this.voiceSelect = document.getElementById('voice-select');
-        this.dialogueVoiceSelect = document.getElementById('dialogue-voice-select');
-        this.smartVoicesCheckbox = document.getElementById('smart-voices');
+  buildPageText(items) {
+    if (!items?.length) return '';
+    let result = '';
+    let previous = null;
+    for (const item of items) {
+      const text = item.str || '';
+      if (!text) continue;
+      const x = item.transform?.[4] ?? 0;
+      const y = item.transform?.[5] ?? 0;
+      if (previous) {
+        const yDiff = Math.abs(y - previous.y);
+        if (previous.hasEOL || yDiff > 10) result += yDiff > 18 ? '\n\n' : '\n';
+        else if (x > previous.x && !result.endsWith(' ') && !result.endsWith('\n')) result += ' ';
+      }
+      result += text;
+      previous = { x, y, hasEOL: Boolean(item.hasEOL) };
     }
+    return result.replace(/-\n(?=[a-z])/g, '').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+  }
 
-    initVoices() {
-        // Load voices when they become available
-        const loadVoices = () => {
-            this.voices = this.speechSynthesis.getVoices();
-            if (this.voices.length > 0) {
-                this.populateVoiceSelects();
-            }
-        };
+  buildUnitsForPage(pageText, page, context) {
+    if (!pageText.trim()) return;
+    const paragraphs = pageText.split(/\n\s*\n|\n(?=\s{0,4}[A-Z“"])/).map(normalizeSpaces).filter(Boolean);
+    paragraphs.forEach(paragraph => {
+      const sentences = this.segmentSentences(paragraph);
+      let bucket = '';
+      const flush = () => {
+        const text = normalizeSpaces(bucket);
+        if (!text) return;
+        const segments = this.buildPerformanceSegments(text, context);
+        this.units.push({ page, text, segments, words: wordCount(text) });
+        bucket = '';
+      };
+      sentences.forEach(sentence => {
+        const candidate = `${bucket}${bucket ? ' ' : ''}${sentence}`;
+        const hasDialogueBoundary = /[”"]\s*$/.test(bucket) || /^[“"]/.test(sentence);
+        if (bucket && (candidate.length > 460 || (bucket.length > 220 && hasDialogueBoundary))) flush();
+        bucket += `${bucket ? ' ' : ''}${sentence}`;
+      });
+      flush();
+    });
+  }
 
-        // Chrome needs this event
-        if (this.speechSynthesis.onvoiceschanged !== undefined) {
-            this.speechSynthesis.onvoiceschanged = loadVoices;
-        }
-        
-        // Also try loading immediately for Firefox/Safari
-        loadVoices();
-        
-        // iOS Safari workaround: voices may not be immediately available
-        // Retry loading voices multiple times
-        if (this.voices.length === 0) {
-            let retryCount = 0;
-            const maxRetries = 20;
-            const retryInterval = setInterval(() => {
-                retryCount++;
-                this.voices = this.speechSynthesis.getVoices();
-                if (this.voices.length > 0) {
-                    this.populateVoiceSelects();
-                    clearInterval(retryInterval);
-                } else if (retryCount >= maxRetries) {
-                    clearInterval(retryInterval);
-                    console.warn('Could not load voices after multiple attempts');
-                }
-            }, 250);
-        }
+  segmentSentences(text) {
+    if (typeof Intl !== 'undefined' && Intl.Segmenter) {
+      try {
+        const segmenter = new Intl.Segmenter('en', { granularity: 'sentence' });
+        return Array.from(segmenter.segment(text), entry => entry.segment.trim()).filter(Boolean);
+      } catch { /* use regex fallback */ }
     }
+    return (text.match(/[^.!?]+(?:[.!?]+[”"\']?|$)/g) || [text]).map(part => part.trim()).filter(Boolean);
+  }
 
-    populateVoiceSelects() {
-        // Clear existing options
-        this.voiceSelect.innerHTML = '';
-        this.dialogueVoiceSelect.innerHTML = '';
-
-        // Group voices by language
-        const englishVoices = this.voices.filter(v => v.lang.startsWith('en'));
-        const otherVoices = this.voices.filter(v => !v.lang.startsWith('en'));
-
-        // Add English voices first
-        englishVoices.forEach((voice, index) => {
-            const option = document.createElement('option');
-            option.value = voice.name;
-            option.textContent = `${voice.name} (${voice.lang})`;
-            this.voiceSelect.appendChild(option.cloneNode(true));
-            this.dialogueVoiceSelect.appendChild(option);
-        });
-
-        // Add other voices
-        otherVoices.forEach((voice, index) => {
-            const option = document.createElement('option');
-            option.value = voice.name;
-            option.textContent = `${voice.name} (${voice.lang})`;
-            this.voiceSelect.appendChild(option.cloneNode(true));
-            this.dialogueVoiceSelect.appendChild(option);
-        });
-
-        // Set default voices - try to pick different voices for narrator and dialogue
-        if (englishVoices.length > 0) {
-            this.narratorVoice = englishVoices[0];
-            this.dialogueVoice = englishVoices.length > 1 ? englishVoices[1] : englishVoices[0];
-            
-            // Try to find a good narrator voice (prefer deeper/male voices for narration)
-            const maleVoice = englishVoices.find(v => 
-                v.name.toLowerCase().includes('male') || 
-                v.name.toLowerCase().includes('david') ||
-                v.name.toLowerCase().includes('james') ||
-                v.name.toLowerCase().includes('daniel')
-            );
-            if (maleVoice) this.narratorVoice = maleVoice;
-
-            // Try to find a different voice for dialogue
-            const femaleVoice = englishVoices.find(v => 
-                v.name.toLowerCase().includes('female') || 
-                v.name.toLowerCase().includes('samantha') ||
-                v.name.toLowerCase().includes('victoria') ||
-                v.name.toLowerCase().includes('karen')
-            );
-            if (femaleVoice && femaleVoice !== this.narratorVoice) {
-                this.dialogueVoice = femaleVoice;
-            }
-
-            this.voiceSelect.value = this.narratorVoice.name;
-            this.dialogueVoiceSelect.value = this.dialogueVoice.name;
-        }
+  buildPerformanceSegments(text, context) {
+    const quotePattern = /([“"][^”"]{1,1200}[”"]|«[^»]{1,1200}»)/g;
+    const segments = [];
+    let lastIndex = 0;
+    let match;
+    while ((match = quotePattern.exec(text)) !== null) {
+      if (match.index > lastIndex) segments.push({ type: 'narration', text: text.slice(lastIndex, match.index), speaker: null });
+      const before = text.slice(Math.max(0, match.index - 180), match.index);
+      const after = text.slice(match.index + match[0].length, match.index + match[0].length + 180);
+      const speaker = this.detectSpeaker(`${before} ${after}`) || this.inferDialogueSpeaker(context);
+      if (speaker) this.rememberSpeaker(context, speaker);
+      segments.push({ type: 'dialogue', text: match[0], speaker: speaker || null });
+      lastIndex = match.index + match[0].length;
     }
+    if (lastIndex < text.length) segments.push({ type: 'narration', text: text.slice(lastIndex), speaker: null });
+    if (!segments.length) segments.push({ type: 'narration', text, speaker: null });
+    return segments.map(segment => ({ ...segment, text: normalizeSpaces(segment.text) })).filter(segment => segment.text);
+  }
 
-    initBackgroundAudio() {
-        // Create an audio element with actual audio content to keep the audio session active
-        // iOS requires real audio content (not silence) to maintain background audio session
-        // and to register with the Media Session API for lock screen controls
-        
-        // Create HTML audio element for Media Session registration
-        this.backgroundAudio = document.createElement('audio');
-        this.backgroundAudio.id = 'background-audio';
-        this.backgroundAudio.loop = true;
-        
-        // Generate a 5-second WAV file with a very quiet 440Hz tone for iOS compatibility
-        this.backgroundAudio.src = this.generateQuietToneDataURL();
-        
-        // iOS Safari attributes
-        this.backgroundAudio.setAttribute('playsinline', '');
-        this.backgroundAudio.setAttribute('webkit-playsinline', '');
-        
-        // Volume set to 1% - low enough to be nearly inaudible but high enough
-        // for iOS to recognize it as active audio for Media Session API
-        this.backgroundAudio.volume = BACKGROUND_AUDIO_VOLUME;
-        
-        // Append to body (hidden)
-        this.backgroundAudio.style.display = 'none';
-        document.body.appendChild(this.backgroundAudio);
-        
-        // Add event listeners for debugging
-        this.backgroundAudio.addEventListener('play', () => {
-            console.log('Background audio started playing');
-            this.updateMediaSessionState();
-        });
-        
-        this.backgroundAudio.addEventListener('pause', () => {
-            console.log('Background audio paused');
-        });
-        
-        this.backgroundAudio.addEventListener('ended', () => {
-            console.log('Background audio ended, restarting...');
-            if (this.isPlaying) {
-                this.backgroundAudio.play().catch(e => console.log('Restart error:', e));
-            }
-        });
-        
-        console.log('Background audio element initialized for lock screen support');
+  detectSpeaker(contextText) {
+    const verbs = 'said|asked|replied|answered|whispered|shouted|murmured|muttered|called|cried|added|continued|exclaimed|snapped|laughed|yelled|breathed|remarked|responded|insisted';
+    const properName = '([A-Z][a-z]{1,24}(?:\\s+[A-Z][a-z]{1,24})?)';
+    const patterns = [new RegExp(`${properName}\\s+(?:${verbs})\\b`, 'g'), new RegExp(`\\b(?:${verbs})\\s+${properName}`, 'g')];
+    let best = null;
+    for (const pattern of patterns) {
+      let match;
+      while ((match = pattern.exec(contextText)) !== null) {
+        const candidate = match[1];
+        if (candidate && !/^(He|She|They|I|We|You|It|His|Her|Their|The|A|An)$/i.test(candidate)) best = candidate;
+      }
     }
-    
-    generateQuietToneDataURL() {
-        // Generate a 5-second WAV file with a very quiet 440Hz sine wave
-        // This ensures iOS recognizes it as actual audio content for Media Session
-        const sampleRate = 44100;
-        const duration = 5; // 5 seconds
-        const frequency = 440; // 440Hz tone
-        const amplitude = 0.005; // Very quiet (0.5% volume)
-        
-        const numSamples = sampleRate * duration;
-        const numChannels = 1;
-        const bitsPerSample = 16;
-        const bytesPerSample = bitsPerSample / 8;
-        const blockAlign = numChannels * bytesPerSample;
-        const byteRate = sampleRate * blockAlign;
-        const dataSize = numSamples * blockAlign;
-        const fileSize = 44 + dataSize;
-        
-        const buffer = new ArrayBuffer(fileSize);
-        const view = new DataView(buffer);
-        
-        // WAV header
-        const writeString = (offset, string) => {
-            for (let i = 0; i < string.length; i++) {
-                view.setUint8(offset + i, string.charCodeAt(i));
-            }
-        };
-        
-        writeString(0, 'RIFF');
-        view.setUint32(4, fileSize - 8, true);
-        writeString(8, 'WAVE');
-        writeString(12, 'fmt ');
-        view.setUint32(16, 16, true); // fmt chunk size
-        view.setUint16(20, 1, true); // audio format (PCM)
-        view.setUint16(22, numChannels, true);
-        view.setUint32(24, sampleRate, true);
-        view.setUint32(28, byteRate, true);
-        view.setUint16(32, blockAlign, true);
-        view.setUint16(34, bitsPerSample, true);
-        writeString(36, 'data');
-        view.setUint32(40, dataSize, true);
-        
-        // Generate audio samples (quiet sine wave)
-        for (let i = 0; i < numSamples; i++) {
-            const t = i / sampleRate;
-            const sample = Math.sin(2 * Math.PI * frequency * t) * amplitude;
-            const intSample = Math.max(-32768, Math.min(32767, Math.floor(sample * 32767)));
-            view.setInt16(44 + i * bytesPerSample, intSample, true);
-        }
-        
-        // Convert to base64
-        const bytes = new Uint8Array(buffer);
-        let binary = '';
-        for (let i = 0; i < bytes.length; i++) {
-            binary += String.fromCharCode(bytes[i]);
-        }
-        
-        return 'data:audio/wav;base64,' + btoa(binary);
+    return best;
+  }
+
+  inferDialogueSpeaker(context) {
+    const recent = context.recentSpeakers.slice(-2);
+    if (recent.length < 2) return context.lastDialogueSpeaker;
+    const [a, b] = recent;
+    return context.lastDialogueSpeaker === b ? a : b;
+  }
+
+  rememberSpeaker(context, speaker) {
+    const name = speaker.trim();
+    context.recentSpeakers = context.recentSpeakers.filter(item => item !== name);
+    context.recentSpeakers.push(name);
+    context.recentSpeakers = context.recentSpeakers.slice(-4);
+    context.lastDialogueSpeaker = name;
+  }
+
+  collectDetectedSpeakers() {
+    const counts = new Map();
+    this.units.forEach(unit => unit.segments.forEach(segment => {
+      if (segment.type === 'dialogue' && segment.speaker) counts.set(segment.speaker, (counts.get(segment.speaker) || 0) + 1);
+    }));
+    return Array.from(counts.entries()).filter(([, count]) => count >= 1).sort((a, b) => b[1] - a[1]).slice(0, 16).map(([name, count]) => ({ name, count }));
+  }
+
+  assignDefaultCharacterVoices() {
+    if (!this.voices.length) return;
+    const candidates = this.getSortedVoices().filter(voice => voice.name !== this.narratorVoice?.name);
+    this.detectedSpeakers.forEach((speaker, index) => {
+      if (!this.speakerVoiceNames.has(speaker.name) && candidates.length) this.speakerVoiceNames.set(speaker.name, candidates[index % candidates.length].name);
+    });
+  }
+
+  renderCastList() {
+    if (!this.castList) return;
+    this.castCount.textContent = String(this.detectedSpeakers.length);
+    if (!this.detectedSpeakers.length) { this.castList.innerHTML = '<div class="empty-cast">No named speakers detected yet.</div>'; return; }
+    const voices = this.getSortedVoices();
+    this.castList.innerHTML = '';
+    this.detectedSpeakers.forEach(({ name, count }) => {
+      const row = document.createElement('div'); row.className = 'cast-row';
+      const nameWrap = document.createElement('div'); nameWrap.className = 'cast-name'; nameWrap.title = `${name} • ${count} detected line${count === 1 ? '' : 's'}`; nameWrap.textContent = name;
+      const select = document.createElement('select'); select.setAttribute('aria-label', `Voice for ${name}`);
+      const current = this.speakerVoiceNames.get(name) || '';
+      voices.forEach(voice => { const option = document.createElement('option'); option.value = voice.name; option.textContent = voice.name; select.appendChild(option); });
+      if (current && voices.some(v => v.name === current)) select.value = current;
+      select.addEventListener('change', () => { this.speakerVoiceNames.set(name, select.value); if (this.isPlaying) this.restartCurrentSegment(); });
+      row.append(nameWrap, select); this.castList.appendChild(row);
+    });
+  }
+
+  updateBookStats() {
+    const words = this.units.reduce((sum, unit) => sum + unit.words, 0);
+    const minutes = Math.max(1, Math.round(words / 155));
+    this.bookWords.textContent = `${words.toLocaleString()} words`;
+    this.bookTime.textContent = `~${this.formatMinutes(minutes)}`;
+  }
+
+  formatMinutes(minutes) {
+    if (minutes < 60) return `${minutes} min`;
+    const hours = Math.floor(minutes / 60); const mins = minutes % 60;
+    return mins ? `${hours} hr ${mins} min` : `${hours} hr`;
+  }
+
+  restoreBookPosition() {
+    let saved = null;
+    try { saved = JSON.parse(localStorage.getItem(POSITION_KEY_PREFIX + this.fileKey) || 'null'); } catch { saved = null; }
+    this.currentUnitIndex = clamp(Number(saved?.unitIndex) || 0, 0, Math.max(0, this.units.length - 1));
+    this.currentSegmentIndex = 0;
+  }
+
+  saveBookPosition() {
+    if (!this.fileKey || !this.units.length) return;
+    localStorage.setItem(POSITION_KEY_PREFIX + this.fileKey, JSON.stringify({ unitIndex: this.currentUnitIndex, updatedAt: Date.now() }));
+  }
+
+  async renderPage(pageNumber, force = false) {
+    if (!this.pdfDoc) return;
+    const page = clamp(Math.round(pageNumber), 1, this.pdfDoc.numPages);
+    if (!force && page === this.lastRenderedPage) return;
+    this.viewerPage = page; this.pageNumber.value = String(page); this.pageRenderStatus.classList.remove('hidden');
+    try {
+      if (this.renderTask) { try { this.renderTask.cancel(); } catch { /* no-op */ } }
+      const pdfPage = await this.pdfDoc.getPage(page);
+      const cssScale = this.pageZoom / 100;
+      const baseViewport = pdfPage.getViewport({ scale: cssScale });
+      const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
+      const renderViewport = pdfPage.getViewport({ scale: cssScale * pixelRatio });
+      this.pdfCanvas.width = Math.floor(renderViewport.width); this.pdfCanvas.height = Math.floor(renderViewport.height);
+      this.pdfCanvas.style.width = `${Math.floor(baseViewport.width)}px`; this.pdfCanvas.style.height = `${Math.floor(baseViewport.height)}px`;
+      this.renderTask = pdfPage.render({ canvasContext: this.canvasContext, viewport: renderViewport });
+      await this.renderTask.promise; this.lastRenderedPage = page;
+    } catch (error) {
+      if (error?.name !== 'RenderingCancelledException') console.error('Page render failed:', error);
+    } finally { this.pageRenderStatus.classList.add('hidden'); }
+  }
+
+  browsePage(page) {
+    if (!this.pdfDoc) return;
+    this.followNarration = false; this.followNarration.checked = false; this.saveSettings();
+    this.renderPage(clamp(page, 1, this.pdfDoc.numPages), true);
+  }
+
+  jumpAudioToPage(page) {
+    if (!this.units.length) return;
+    const index = this.units.findIndex(unit => unit.page >= page);
+    if (index < 0) return;
+    const wasPlaying = this.isPlaying;
+    this.pause(false);
+    this.currentUnitIndex = index; this.currentSegmentIndex = 0; this.followNarration = true; this.followNarration.checked = true; this.viewerPage = this.units[index].page;
+    this.updateDisplay(); this.renderPage(this.viewerPage, true); this.saveBookPosition();
+    if (wasPlaying) this.play();
+  }
+
+  updateDisplay() {
+    if (!this.units.length) return;
+    const unit = this.units[this.currentUnitIndex];
+    this.currentLocation.textContent = `Page ${unit.page}`;
+    const active = unit.segments[this.currentSegmentIndex];
+    this.speakerChip.textContent = active?.type === 'dialogue' ? (active.speaker || 'Dialogue') : 'Narrator';
+    this.currentText.innerHTML = unit.segments.map((segment, index) => {
+      const classes = ['speech-segment', segment.type === 'dialogue' ? 'dialogue' : '', index === this.currentSegmentIndex && this.isPlaying ? 'active' : ''].filter(Boolean).join(' ');
+      const label = segment.type === 'dialogue' && segment.speaker ? `<span class="speaker-label">${escapeHtml(segment.speaker)}</span>` : '';
+      return `<span class="${classes}" data-segment="${index}">${label}${escapeHtml(segment.text)}</span>${index < unit.segments.length - 1 ? ' ' : ''}`;
+    }).join('');
+    if (this.followNarration && this.viewerPage !== unit.page) { this.viewerPage = unit.page; this.renderPage(unit.page); }
+    this.updateProgressMeta(); this.saveBookPosition(); this.updateMediaSessionMetadata();
+  }
+
+  updateProgressMeta() {
+    if (!this.units.length) return;
+    const progress = ((this.currentUnitIndex + this.currentSegmentIndex / Math.max(1, this.units[this.currentUnitIndex].segments.length)) / this.units.length) * 100;
+    const safeProgress = clamp(progress, 0, 100);
+    this.progressFill.style.width = `${safeProgress}%`; this.progressThumb.style.left = `${safeProgress}%`; this.progressLabel.textContent = `${Math.round(safeProgress)}%`; this.progressBar.setAttribute('aria-valuenow', String(Math.round(safeProgress)));
+    const remainingWords = this.units.slice(this.currentUnitIndex).reduce((sum, unit) => sum + unit.words, 0);
+    const minutes = Math.max(0, Math.ceil(remainingWords / (155 * this.speechRate)));
+    this.remainingTime.textContent = minutes ? `~${this.formatMinutes(minutes)} left` : 'Finishing…';
+  }
+
+  togglePlayPause() { if (this.isPlaying) this.pause(); else this.play(); }
+
+  play() {
+    if (!this.units.length || !('speechSynthesis' in window)) { this.showToast('Speech synthesis is not available in this browser.'); return; }
+    this.isPlaying = true; this.sessionToken += 1; this.playIcon.textContent = 'Ⅱ'; this.playPauseBtn.setAttribute('aria-label', 'Pause');
+    this.startBackgroundAudio(); this.startIOSKeepAlive(); this.updateDisplay(); this.speakCurrentSegment(this.sessionToken); this.updateMediaSessionState();
+  }
+
+  pause(stopBackground = true) {
+    this.isPlaying = false; this.sessionToken += 1; this.speechSynthesis.cancel(); this.playIcon.textContent = '▶'; this.playPauseBtn.setAttribute('aria-label', 'Play'); this.stopIOSKeepAlive();
+    if (stopBackground) this.stopBackgroundAudio();
+    this.updateDisplay(); this.updateMediaSessionState();
+  }
+
+  restartCurrentSegment() {
+    if (!this.isPlaying) return;
+    this.sessionToken += 1; this.speechSynthesis.cancel();
+    const token = this.sessionToken;
+    setTimeout(() => this.speakCurrentSegment(token), isIOS ? 80 : 35);
+  }
+
+  speakCurrentSegment(token) {
+    if (!this.isPlaying || token !== this.sessionToken) return;
+    if (this.currentUnitIndex >= this.units.length) { this.finishPlayback(); return; }
+    const unit = this.units[this.currentUnitIndex];
+    if (this.currentSegmentIndex >= unit.segments.length) {
+      this.currentUnitIndex += 1; this.currentSegmentIndex = 0;
+      if (this.currentUnitIndex >= this.units.length) { this.finishPlayback(); return; }
+      this.updateDisplay(); setTimeout(() => this.speakCurrentSegment(token), 170); return;
     }
+    const segment = unit.segments[this.currentSegmentIndex];
+    this.updateDisplay();
+    const textChunks = this.splitForSpeech(segment.text, isIOS ? 340 : 620);
+    this.speakChunkSequence(textChunks, segment, 0, token);
+  }
 
-    initMediaSession() {
-        if (!this.mediaSessionSupported) {
-            console.log('Media Session API not supported');
-            return;
-        }
-        
-        console.log('Initializing Media Session API for control center integration');
-        
-        // Set initial metadata immediately so the app appears in media controls
-        try {
-            navigator.mediaSession.metadata = new MediaMetadata({
-                title: 'PDF Story Reader',
-                artist: 'Ready to read',
-                album: 'Upload a PDF to begin',
-                artwork: [
-                    { src: MEDIA_SESSION_ARTWORK_URL, sizes: '96x96', type: 'image/svg+xml' }
-                ]
-            });
-        } catch (e) {
-            console.log('Error setting initial metadata:', e.message);
-        }
-        
-        // Set up media session action handlers for lock screen controls
-        navigator.mediaSession.setActionHandler('play', () => {
-            console.log('Media Session: play');
-            this.play();
-        });
-        
-        navigator.mediaSession.setActionHandler('pause', () => {
-            console.log('Media Session: pause');
-            this.pause();
-        });
-        
-        navigator.mediaSession.setActionHandler('previoustrack', () => {
-            console.log('Media Session: previoustrack (rewind)');
-            this.rewind();
-        });
-        
-        navigator.mediaSession.setActionHandler('nexttrack', () => {
-            console.log('Media Session: nexttrack (forward)');
-            this.forward();
-        });
-        
-        // Seek backward/forward handlers (for scrubbing controls)
-        try {
-            navigator.mediaSession.setActionHandler('seekbackward', (details) => {
-                console.log('Media Session: seekbackward', details);
-                this.rewind();
-            });
-            
-            navigator.mediaSession.setActionHandler('seekforward', (details) => {
-                console.log('Media Session: seekforward', details);
-                this.forward();
-            });
-        } catch (e) {
-            console.log('Seek handlers not supported:', e.message);
-        }
-        
-        // Stop handler for when user swipes away the media notification
-        try {
-            navigator.mediaSession.setActionHandler('stop', () => {
-                console.log('Media Session: stop');
-                this.pause();
-            });
-        } catch (e) {
-            console.log('Stop handler not supported:', e.message);
-        }
+  splitForSpeech(text, maxChars) {
+    if (text.length <= maxChars) return [text];
+    const parts = this.segmentSentences(text); const chunks = []; let current = '';
+    parts.forEach(part => {
+      if (current && `${current} ${part}`.length > maxChars) { chunks.push(current); current = part; }
+      else current += `${current ? ' ' : ''}${part}`;
+    });
+    if (current) chunks.push(current);
+    return chunks.length ? chunks : [text.slice(0, maxChars), text.slice(maxChars)];
+  }
+
+  speakChunkSequence(chunks, segment, chunkIndex, token) {
+    if (!this.isPlaying || token !== this.sessionToken) return;
+    if (chunkIndex >= chunks.length) {
+      this.currentSegmentIndex += 1;
+      setTimeout(() => this.speakCurrentSegment(token), segment.type === 'dialogue' ? 115 : 85);
+      return;
     }
+    const utterance = new SpeechSynthesisUtterance(chunks[chunkIndex]);
+    utterance.rate = this.speechRate;
+    utterance.pitch = clamp(this.speechPitch + (segment.type === 'dialogue' ? 0.02 : 0), 0.1, 2);
+    utterance.volume = this.speechVolume;
+    utterance.voice = this.getVoiceForSegment(segment);
+    utterance.onend = () => { if (this.isPlaying && token === this.sessionToken) this.speakChunkSequence(chunks, segment, chunkIndex + 1, token); };
+    utterance.onerror = event => {
+      if (event.error === 'canceled' || token !== this.sessionToken) return;
+      console.warn('Speech error:', event.error);
+      setTimeout(() => this.speakChunkSequence(chunks, segment, chunkIndex + 1, token), 120);
+    };
+    this.speechSynthesis.speak(utterance);
+  }
 
-    updateMediaSessionMetadata() {
-        if (!this.mediaSessionSupported) return;
-        
-        const currentParagraph = this.paragraphs[this.currentParagraphIndex];
-        const bookTitle = this.bookName ? this.bookName.textContent : 'PDF Story Reader';
-        const pageInfo = currentParagraph ? `Page ${currentParagraph.page}` : '';
-        
-        try {
-            navigator.mediaSession.metadata = new MediaMetadata({
-                title: bookTitle,
-                artist: 'PDF Story Reader',
-                album: pageInfo,
-                artwork: [
-                    { src: MEDIA_SESSION_ARTWORK_URL, sizes: '96x96', type: 'image/svg+xml' }
-                ]
-            });
-        } catch (e) {
-            console.log('Error setting media metadata:', e.message);
-        }
+  getVoiceForSegment(segment) {
+    if (!this.smartVoices || segment.type !== 'dialogue') return this.narratorVoice;
+    if (segment.speaker) {
+      const name = this.speakerVoiceNames.get(segment.speaker);
+      const voice = this.voices.find(candidate => candidate.name === name);
+      if (voice) return voice;
     }
+    return this.dialogueVoice || this.narratorVoice;
+  }
 
-    updateMediaSessionState() {
-        if (!this.mediaSessionSupported) return;
-        
-        try {
-            navigator.mediaSession.playbackState = this.isPlaying ? 'playing' : 'paused';
-        } catch (e) {
-            console.log('Error setting playback state:', e.message);
-        }
+  finishPlayback() {
+    this.isPlaying = false; this.playIcon.textContent = '▶'; this.stopIOSKeepAlive(); this.stopBackgroundAudio(); this.updateMediaSessionState(); this.showToast('End of book.');
+  }
+
+  seekBySeconds(seconds) {
+    if (!this.units.length) return;
+    const targetWords = Math.max(20, Math.round(Math.abs(seconds) * (155 * this.speechRate) / 60));
+    const direction = Math.sign(seconds) || 1;
+    let index = this.currentUnitIndex; let traversed = 0;
+    while (traversed < targetWords) {
+      const next = index + direction;
+      if (next < 0 || next >= this.units.length) break;
+      index = next; traversed += this.units[index].words;
     }
+    const wasPlaying = this.isPlaying;
+    this.pause(false); this.currentUnitIndex = index; this.currentSegmentIndex = 0; this.updateDisplay();
+    if (wasPlaying) this.play();
+  }
 
-    startBackgroundAudio() {
-        if (!this.backgroundAudio) return;
-        
-        console.log('Starting background audio for media session...');
-        
-        // Ensure the audio source is set
-        if (!this.backgroundAudio.src) {
-            this.backgroundAudio.src = this.generateQuietToneDataURL();
-        }
-        
-        // Play the background audio to keep the session active
-        const playPromise = this.backgroundAudio.play();
-        if (playPromise !== undefined) {
-            playPromise.then(() => {
-                console.log('Background audio playing successfully - media session should be active');
-                this.updateMediaSessionMetadata();
-                this.updateMediaSessionState();
-            }).catch(e => {
-                console.log('Background audio play error:', e.message);
-                // Try again with user interaction required message
-                if (e.name === 'NotAllowedError') {
-                    console.log('Audio playback requires user interaction first');
-                }
-            });
-        }
-    }
+  seekFromProgressEvent(event) {
+    if (!this.units.length) return;
+    const rect = this.progressBar.getBoundingClientRect();
+    const percent = clamp((event.clientX - rect.left) / rect.width, 0, 1);
+    const index = clamp(Math.floor(percent * this.units.length), 0, this.units.length - 1);
+    const wasPlaying = this.isPlaying;
+    this.pause(false); this.currentUnitIndex = index; this.currentSegmentIndex = 0; this.updateDisplay();
+    if (wasPlaying) this.play();
+  }
 
-    stopBackgroundAudio() {
-        if (!this.backgroundAudio) return;
-        
-        console.log('Stopping background audio...');
-        this.backgroundAudio.pause();
-        this.updateMediaSessionState();
-    }
+  previewSelectedVoices() {
+    this.speechSynthesis.cancel();
+    const samples = [
+      { text: 'The room fell quiet as the storm rolled over the city.', voice: this.narratorVoice, pitch: this.speechPitch },
+      { text: 'I was hoping you would say that.', voice: this.dialogueVoice, pitch: this.speechPitch + 0.02 }
+    ];
+    const speak = index => {
+      if (index >= samples.length) return;
+      const sample = samples[index];
+      const utterance = new SpeechSynthesisUtterance(sample.text);
+      utterance.voice = sample.voice; utterance.rate = this.speechRate; utterance.pitch = clamp(sample.pitch, 0.1, 2); utterance.volume = this.speechVolume;
+      utterance.onend = () => setTimeout(() => speak(index + 1), 180);
+      this.speechSynthesis.speak(utterance);
+    };
+    speak(0);
+  }
 
-    initEventListeners() {
-        // Constants for touch handling
-        const TOUCH_CLICK_THRESHOLD_MS = 500; // Time to distinguish touch from click
-        
-        // Helper to add unified touch/click handlers for iOS compatibility
-        // This prevents double-firing while ensuring responsiveness
-        const addTapHandler = (element, handler, options = {}) => {
-            let touchMoved = false;
-            let lastTouchTime = 0;
-            
-            // Track touch movement to distinguish taps from scrolls
-            element.addEventListener('touchstart', (e) => {
-                touchMoved = false;
-            }, { passive: true });
-            
-            element.addEventListener('touchmove', () => {
-                touchMoved = true;
-            }, { passive: true });
-            
-            element.addEventListener('touchend', (e) => {
-                // Capture state to avoid race conditions
-                const wasTouchMove = touchMoved;
-                if (!wasTouchMove) {
-                    e.preventDefault();
-                    lastTouchTime = Date.now();
-                    // Execute handler immediately on touchend for responsiveness
-                    handler(e);
-                }
-            }, { passive: false });
-            
-            // Fallback click handler for non-touch devices
-            element.addEventListener('click', (e) => {
-                // Ignore click if it came from a recent touch event
-                const timeSinceTouch = Date.now() - lastTouchTime;
-                if (timeSinceTouch > TOUCH_CLICK_THRESHOLD_MS) {
-                    if (options.preventDefault !== false) {
-                        e.preventDefault();
-                    }
-                    handler(e);
-                }
-            });
-        };
-        
-        // File upload events with unified touch/click handling
-        addTapHandler(this.dropZone, () => {
-            this.fileInput.click();
-        });
-        
-        this.fileInput.addEventListener('change', (e) => this.handleFileSelect(e));
-        
-        // Drag and drop - need to handle dragenter, dragover, dragleave, and drop
-        // Both dragenter and dragover need preventDefault to allow drop
-        this.dropZone.addEventListener('dragenter', (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            this.dropZone.classList.add('dragover');
-        });
-        
-        this.dropZone.addEventListener('dragover', (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            this.dropZone.classList.add('dragover');
-        });
-        
-        this.dropZone.addEventListener('dragleave', (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            this.dropZone.classList.remove('dragover');
-        });
-        
-        this.dropZone.addEventListener('drop', (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            this.dropZone.classList.remove('dragover');
-            
-            const file = e.dataTransfer.files[0];
-            this.processFile(file);
-        });
+  configureSleepTimer(minutes) {
+    if (this.sleepTimerId) clearTimeout(this.sleepTimerId);
+    this.sleepTimerId = null;
+    if (!minutes) { this.showToast('Sleep timer is off.'); return; }
+    this.sleepTimerId = setTimeout(() => { this.pause(); this.sleepTimer.value = '0'; this.showToast('Sleep timer finished. Playback paused.'); }, minutes * 60 * 1000);
+    this.showToast(`Sleep timer set for ${minutes} minutes.`);
+  }
 
-        // Reader controls with unified touch/click handling
-        addTapHandler(this.changeBookBtn, () => this.resetReader());
-        addTapHandler(this.playPauseBtn, () => this.togglePlayPause());
-        addTapHandler(this.rewindBtn, () => this.rewind());
-        addTapHandler(this.forwardBtn, () => this.forward());
+  initBackgroundAudio() {
+    this.backgroundAudio = document.createElement('audio');
+    this.backgroundAudio.loop = true;
+    this.backgroundAudio.setAttribute('playsinline', '');
+    this.backgroundAudio.setAttribute('webkit-playsinline', '');
+    this.backgroundAudio.style.display = 'none';
+    this.backgroundAudio.volume = 0.005;
+    this.backgroundAudio.src = this.generateQuietToneDataURL();
+    document.body.appendChild(this.backgroundAudio);
+  }
 
-        // Progress bar - handle both touch and click for seeking
-        const progressBar = document.querySelector('.progress-bar');
-        
-        if (progressBar) {
-            const handleProgressSeek = (clientX) => {
-                const rect = progressBar.getBoundingClientRect();
-                const percent = (clientX - rect.left) / rect.width;
-                this.seekToPercent(Math.max(0, Math.min(1, percent)));
-            };
-            
-            progressBar.addEventListener('click', (e) => {
-                handleProgressSeek(e.clientX);
-            });
-            
-            progressBar.addEventListener('touchend', (e) => {
-                if (e.changedTouches && e.changedTouches.length > 0) {
-                    e.preventDefault();
-                    handleProgressSeek(e.changedTouches[0].clientX);
-                }
-            }, { passive: false });
-        }
+  generateQuietToneDataURL() {
+    const sampleRate = 8000; const seconds = 1; const samples = sampleRate * seconds;
+    const buffer = new ArrayBuffer(44 + samples * 2); const view = new DataView(buffer);
+    const write = (offset, value) => [...value].forEach((char, i) => view.setUint8(offset + i, char.charCodeAt(0)));
+    write(0, 'RIFF'); view.setUint32(4, 36 + samples * 2, true); write(8, 'WAVE'); write(12, 'fmt ');
+    view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true); view.setUint32(24, sampleRate, true); view.setUint32(28, sampleRate * 2, true); view.setUint16(32, 2, true); view.setUint16(34, 16, true);
+    write(36, 'data'); view.setUint32(40, samples * 2, true);
+    for (let i = 0; i < samples; i += 1) { const sample = Math.sin(2 * Math.PI * 220 * (i / sampleRate)) * 80; view.setInt16(44 + i * 2, sample, true); }
+    let binary = '';
+    new Uint8Array(buffer).forEach(byte => { binary += String.fromCharCode(byte); });
+    return `data:audio/wav;base64,${btoa(binary)}`;
+  }
 
-        // Settings
-        this.speedControl.addEventListener('input', (e) => {
-            this.speechRate = parseFloat(e.target.value);
-            this.speedValue.textContent = `${this.speechRate.toFixed(1)}x`;
-        });
+  startBackgroundAudio() { if (this.backgroundAudio) this.backgroundAudio.play().catch(() => {}); }
+  stopBackgroundAudio() { if (this.backgroundAudio) this.backgroundAudio.pause(); }
+  startIOSKeepAlive() {
+    this.stopIOSKeepAlive();
+    if (!isIOS) return;
+    this.iosKeepAliveTimer = setInterval(() => { if (this.isPlaying && this.speechSynthesis.paused) this.speechSynthesis.resume(); }, 9000);
+  }
+  stopIOSKeepAlive() { if (this.iosKeepAliveTimer) clearInterval(this.iosKeepAliveTimer); this.iosKeepAliveTimer = null; }
 
-        this.voiceSelect.addEventListener('change', (e) => {
-            this.narratorVoice = this.voices.find(v => v.name === e.target.value);
-        });
+  initMediaSession() {
+    if (!('mediaSession' in navigator)) return;
+    const safeSet = (action, handler) => { try { navigator.mediaSession.setActionHandler(action, handler); } catch { /* unsupported */ } };
+    safeSet('play', () => this.play()); safeSet('pause', () => this.pause()); safeSet('seekbackward', details => this.seekBySeconds(-(details.seekOffset || 15)));
+    safeSet('seekforward', details => this.seekBySeconds(details.seekOffset || 15)); safeSet('previoustrack', () => this.seekBySeconds(-15)); safeSet('nexttrack', () => this.seekBySeconds(15)); safeSet('stop', () => this.pause());
+  }
 
-        this.dialogueVoiceSelect.addEventListener('change', (e) => {
-            this.dialogueVoice = this.voices.find(v => v.name === e.target.value);
-        });
+  updateMediaSessionMetadata() {
+    if (!('mediaSession' in navigator) || typeof MediaMetadata === 'undefined') return;
+    const unit = this.units[this.currentUnitIndex];
+    try {
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title: this.bookName?.textContent || 'PDF Story Reader', artist: unit ? `Page ${unit.page}` : 'Ready to read', album: 'PDF Story Reader', artwork: [{ src: MEDIA_SESSION_ARTWORK_URL, sizes: '96x96', type: 'image/svg+xml' }]
+      });
+    } catch { /* optional */ }
+  }
 
-        this.smartVoicesCheckbox.addEventListener('change', (e) => {
-            this.smartVoices = e.target.checked;
-        });
+  updateMediaSessionState() { if ('mediaSession' in navigator) { try { navigator.mediaSession.playbackState = this.isPlaying ? 'playing' : 'paused'; } catch { /* optional */ } } }
 
-        // Handle page visibility - DO NOT pause when tab is hidden to allow background playback
-        // The background audio and Media Session API will keep playback going when locked
-        document.addEventListener('visibilitychange', () => {
-            if (document.hidden && this.isPlaying) {
-                // Keep playing in background - update media session state
-                this.updateMediaSessionState();
-                console.log('Page hidden, continuing background playback');
-            } else if (!document.hidden && this.isPlaying) {
-                // Page visible again - ensure display is updated
-                this.updateDisplay();
-            }
-        });
+  resetReader() {
+    this.pause();
+    this.pdfDoc = null; this.file = null; this.fileKey = ''; this.pageTexts = []; this.units = []; this.detectedSpeakers = []; this.speakerVoiceNames.clear();
+    this.currentUnitIndex = 0; this.currentSegmentIndex = 0; this.viewerPage = 1; this.lastRenderedPage = null; this.fileInput.value = '';
+    this.readerSection.classList.add('hidden'); this.uploadSection.classList.remove('hidden'); this.changeBook.classList.add('hidden');
+    this.castCount.textContent = '0'; this.castList.innerHTML = '<div class="empty-cast">No named speakers detected yet.</div>';
+    this.canvasContext.clearRect(0, 0, this.pdfCanvas.width, this.pdfCanvas.height);
+  }
 
-        // Prevent browser from opening files dropped outside the drop zone
-        document.addEventListener('dragover', (e) => {
-            e.preventDefault();
-        });
-        document.addEventListener('drop', (e) => {
-            e.preventDefault();
-        });
-    }
+  showLoading(show, title = '', message = '', percent = 0) {
+    if (!show) { this.loadingOverlay.classList.add('hidden'); return; }
+    this.loadingOverlay.classList.remove('hidden');
+    if (title) this.loadingTitle.textContent = title;
+    if (message) this.loadingMessage.textContent = message;
+    const safePercent = clamp(percent, 0, 100);
+    this.loadingFill.style.width = `${safePercent}%`; this.loadingPercent.textContent = `${safePercent}%`;
+  }
 
-    // Helper method to validate and process a file
-    processFile(file) {
-        if (!file) {
-            alert('No file detected. Please try again.');
-            return;
-        }
-        
-        // Check file extension as MIME type may be unreliable
-        const isPdf = file.type === 'application/pdf' || 
-                      file.name.toLowerCase().endsWith('.pdf');
-        if (isPdf) {
-            this.loadPDF(file);
-        } else {
-            alert('Please upload a PDF file. Received: ' + (file.name || 'unknown file'));
-        }
-    }
-
-    handleFileSelect(e) {
-        const file = e.target.files[0];
-        this.processFile(file);
-    }
-
-    async loadPDF(file) {
-        this.showLoading(true);
-        
-        try {
-            // Wait for pdf.js to load if it hasn't yet
-            if (typeof pdfjsLib === 'undefined' || !pdfJsLoaded) {
-                console.log('PDF.js not loaded yet, waiting...');
-                await waitForPdfJs(PDFJS_MAX_WAIT_MS);
-            }
-            
-            const arrayBuffer = await file.arrayBuffer();
-            this.pdfDoc = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-            
-            this.bookName.textContent = file.name.replace('.pdf', '');
-            this.totalPages.textContent = `of ${this.pdfDoc.numPages} pages`;
-            
-            await this.extractText();
-            
-            this.uploadSection.classList.add('hidden');
-            this.readerSection.classList.remove('hidden');
-            
-            this.updateDisplay();
-        } catch (error) {
-            console.error('Error loading PDF:', error);
-            alert(error.message || 'Error loading PDF. Please try another file.');
-        } finally {
-            this.showLoading(false);
-        }
-    }
-
-    async extractText() {
-        this.textContent = [];
-        this.paragraphs = [];
-        
-        for (let i = 1; i <= this.pdfDoc.numPages; i++) {
-            const page = await this.pdfDoc.getPage(i);
-            const textContent = await page.getTextContent();
-            
-            let pageText = '';
-            let lastY = null;
-            
-            textContent.items.forEach(item => {
-                // Detect new paragraphs based on Y position changes
-                if (lastY !== null && Math.abs(item.transform[5] - lastY) > 12) {
-                    pageText += '\n\n';
-                } else if (lastY !== null) {
-                    pageText += ' ';
-                }
-                pageText += item.str;
-                lastY = item.transform[5];
-            });
-            
-            this.textContent.push({
-                page: i,
-                text: pageText.trim()
-            });
-        }
-
-        // Split into readable paragraphs/sentences
-        this.paragraphs = [];
-        this.textContent.forEach(pageContent => {
-            const text = pageContent.text;
-            // Split by paragraphs (double newlines) or by sentences for better TTS chunks
-            const chunks = text.split(/\n\n+/).filter(p => p.trim());
-            
-            chunks.forEach(chunk => {
-                // Further split long paragraphs into sentences for better reading
-                const sentences = this.splitIntoSentences(chunk);
-                sentences.forEach(sentence => {
-                    if (sentence.trim()) {
-                        this.paragraphs.push({
-                            page: pageContent.page,
-                            text: sentence.trim(),
-                            isDialogue: this.detectDialogue(sentence),
-                            speaker: this.detectSpeaker(sentence)
-                        });
-                    }
-                });
-            });
-        });
-    }
-
-    splitIntoSentences(text) {
-        // Split into larger, more natural chunks for TTS
-        // Target ~800-1000 chars to reduce interruptions, but respect natural breaks
-        const chunks = [];
-        let current = '';
-        
-        // Constants for chunk sizing
-        const TARGET_MIN_SIZE = 600;  // Minimum preferred chunk size
-        const TARGET_MAX_SIZE = 1200; // Maximum chunk size before forcing split
-        const HARD_MAX_SIZE = 1500;   // Absolute maximum to prevent TTS issues
-        
-        // Split on sentence endings
-        const parts = text.split(/(?<=[.!?])\s+/);
-        
-        parts.forEach(part => {
-            const potentialLength = current.length + part.length + 1;
-            
-            // Smart chunking rules:
-            // 1. If under target min, always accumulate
-            // 2. If within target range, keep accumulating (dialogue-aware)
-            // 3. If getting long, look for good break points
-            // 4. At hard limit, must split
-            
-            if (current.length < TARGET_MIN_SIZE) {
-                // Under minimum - always add more
-                current += (current ? ' ' : '') + part;
-            } else if (potentialLength < TARGET_MAX_SIZE) {
-                // Within target range - continue accumulating
-                // This keeps dialogue and related text together naturally
-                current += (current ? ' ' : '') + part;
-            } else if (potentialLength < HARD_MAX_SIZE) {
-                // Getting long but not at hard limit - look for good break points
-                const isGoodBreak = /[.!?]["']?\s*$/.test(current) && !/^\s*["']/.test(part);
-                
-                if (isGoodBreak) {
-                    if (current) chunks.push(current);
-                    current = part;
-                } else {
-                    // Not a good break - continue accumulating
-                    current += (current ? ' ' : '') + part;
-                }
-            } else {
-                // At hard limit - must split
-                if (current) chunks.push(current);
-                current = part;
-            }
-        });
-        
-        if (current) chunks.push(current);
-        
-        return chunks;
-    }
-
-    detectDialogue(text) {
-        // Detect if text contains dialogue (quoted speech)
-        const dialoguePatterns = [
-            /"[^"]*"/,           // Double quotes
-            /'[^']*'/,           // Single quotes
-            /「[^」]*」/,         // Japanese quotes
-            /«[^»]*»/,           // French quotes
-            /„[^"]*"/            // German quotes
-        ];
-        
-        return dialoguePatterns.some(pattern => pattern.test(text));
-    }
-
-    detectSpeaker(text) {
-        // Try to detect who is speaking based on context
-        // Look for patterns like: "Hello," said John. or John said, "Hello"
-        const speakerPatterns = [
-            /said\s+(\w+)/i,
-            /(\w+)\s+said/i,
-            /(\w+)\s+replied/i,
-            /replied\s+(\w+)/i,
-            /(\w+)\s+asked/i,
-            /asked\s+(\w+)/i,
-            /(\w+)\s+exclaimed/i,
-            /(\w+)\s+whispered/i,
-            /(\w+)\s+shouted/i,
-            /(\w+)\s+muttered/i,
-            /(\w+)\s+called/i,
-            /(\w+)\s+answered/i
-        ];
-
-        for (const pattern of speakerPatterns) {
-            const match = text.match(pattern);
-            if (match) {
-                return match[1];
-            }
-        }
-
-        return null;
-    }
-
-    getVoiceForSpeaker(speaker) {
-        if (!speaker || !this.smartVoices) {
-            return this.narratorVoice;
-        }
-
-        // Check if we've already assigned a voice to this speaker
-        if (this.speakerVoices.has(speaker)) {
-            return this.speakerVoices.get(speaker);
-        }
-
-        // Assign a new voice to this speaker
-        const englishVoices = this.voices.filter(v => v.lang.startsWith('en'));
-        const usedVoices = Array.from(this.speakerVoices.values());
-        
-        // Find an unused voice
-        let newVoice = englishVoices.find(v => 
-            !usedVoices.includes(v) && 
-            v !== this.narratorVoice
-        );
-
-        if (!newVoice) {
-            // If all voices used, cycle through them
-            const index = this.speakerVoices.size % englishVoices.length;
-            newVoice = englishVoices[index];
-        }
-
-        this.speakerVoices.set(speaker, newVoice);
-        return newVoice;
-    }
-
-    updateDisplay() {
-        if (this.paragraphs.length === 0) return;
-        
-        const currentParagraph = this.paragraphs[this.currentParagraphIndex];
-        
-        // Update text display with highlighting
-        let displayText = currentParagraph.text;
-        
-        // Highlight dialogue
-        if (currentParagraph.isDialogue) {
-            displayText = displayText.replace(
-                /(["'][^"']*["'])/g, 
-                '<span class="dialogue">$1</span>'
-            );
-        }
-        
-        this.currentText.innerHTML = displayText;
-        
-        // Update progress
-        const progress = ((this.currentParagraphIndex + 1) / this.paragraphs.length) * 100;
-        this.progressFill.style.width = `${progress}%`;
-        this.currentPosition.textContent = `Page ${currentParagraph.page}`;
-    }
-
-    togglePlayPause() {
-        console.log('togglePlayPause called, isPlaying:', this.isPlaying);
-        if (this.isPlaying) {
-            this.pause();
-        } else {
-            this.play();
-        }
-    }
-
-    play() {
-        // iOS Safari speech init constants
-        const IOS_INIT_VOLUME = 0.01; // Nearly silent volume for init utterance
-        const IOS_INIT_RATE = 10; // Maximum rate for quick init
-        const IOS_INIT_DELAY_MS = 100; // Delay after init utterance
-        
-        if (this.paragraphs.length === 0) {
-            console.log('No paragraphs to play');
-            return;
-        }
-        
-        console.log('Play triggered, isIOSSafari:', isIOSSafari, 'iosSpeechInitialized:', this.iosSpeechInitialized);
-        
-        // iOS Safari workaround: Initialize speech synthesis with a user gesture
-        // by speaking a short utterance first - empty string may not work
-        if (isIOSSafari && !this.iosSpeechInitialized) {
-            console.log('Initializing iOS Safari speech synthesis');
-            this.speechSynthesis.cancel();
-            // Use a very short word instead of empty string for better iOS compatibility
-            const initUtterance = new SpeechSynthesisUtterance(' ');
-            initUtterance.volume = IOS_INIT_VOLUME;
-            initUtterance.rate = IOS_INIT_RATE;
-            this.speechSynthesis.speak(initUtterance);
-            this.iosSpeechInitialized = true;
-            
-            // Wait a tiny bit for the init utterance to process
-            setTimeout(() => {
-                this.isPlaying = true;
-                this.updatePlayButton();
-                this.startIOSSpeechTimer();
-                this.startBackgroundAudio(); // Enable background playback
-                this.speakCurrent();
-            }, IOS_INIT_DELAY_MS);
-            return;
-        }
-        
-        this.isPlaying = true;
-        this.updatePlayButton();
-        
-        // Start background audio for lock screen control support
-        this.startBackgroundAudio();
-        
-        // iOS Safari workaround: Start a timer to periodically resume speech
-        // This prevents iOS Safari from pausing speech unexpectedly
-        if (isIOSSafari) {
-            this.startIOSSpeechTimer();
-        }
-        
-        this.speakCurrent();
-    }
-
-    pause() {
-        this.isPlaying = false;
-        this.speechSynthesis.cancel();
-        this.updatePlayButton();
-        
-        // Stop background audio
-        this.stopBackgroundAudio();
-        
-        // iOS Safari workaround: Stop the resume timer
-        if (isIOSSafari) {
-            this.stopIOSSpeechTimer();
-        }
-    }
-    
-    // iOS Safari workaround: Timer to prevent speech from getting stuck
-    startIOSSpeechTimer() {
-        this.stopIOSSpeechTimer();
-        this.iosSpeechTimer = setInterval(() => {
-            if (this.isPlaying && this.speechSynthesis.paused) {
-                this.speechSynthesis.resume();
-            }
-        }, 10000); // Check every 10 seconds
-    }
-    
-    stopIOSSpeechTimer() {
-        if (this.iosSpeechTimer) {
-            clearInterval(this.iosSpeechTimer);
-            this.iosSpeechTimer = null;
-        }
-    }
-
-    updatePlayButton() {
-        if (this.isPlaying) {
-            this.playIcon.textContent = '⏸️';
-            this.playLabel.textContent = 'Pause';
-        } else {
-            this.playIcon.textContent = '▶️';
-            this.playLabel.textContent = 'Play';
-        }
-    }
-
-    speakCurrent() {
-        if (!this.isPlaying || this.currentParagraphIndex >= this.paragraphs.length) {
-            this.isPlaying = false;
-            this.updatePlayButton();
-            this.stopBackgroundAudio(); // Stop background audio when done
-            // iOS Safari workaround: Stop the timer when done
-            if (isIOSSafari) {
-                this.stopIOSSpeechTimer();
-            }
-            return;
-        }
-
-        const paragraph = this.paragraphs[this.currentParagraphIndex];
-        this.updateDisplay();
-        this.updateMediaSessionMetadata(); // Update lock screen info
-
-        // Cancel any ongoing speech
-        this.speechSynthesis.cancel();
-        
-        // iOS Safari workaround: Small delay after cancel to ensure clean state
-        const speakDelay = isIOSSafari ? 50 : 0;
-        
-        setTimeout(() => {
-            // Get the text to speak - chunk long text for iOS Safari
-            let textToSpeak = paragraph.text;
-            
-            // iOS Safari has issues with very long utterances (can fail after ~15 seconds)
-            // Increased limits since we now have smarter chunking at the paragraph level
-            // These are fallback limits for any remaining very long chunks
-            const maxChars = isIOSSafari ? 800 : 1500;
-            if (textToSpeak.length > maxChars) {
-                // Find a good break point (prefer sentence boundaries over word boundaries)
-                let breakPoint = textToSpeak.lastIndexOf('. ', maxChars);
-                // If no sentence break found in the latter half, fall back to word break
-                // Using maxChars/2 ensures we don't create tiny chunks from early sentence breaks
-                if (breakPoint < maxChars / 2) {
-                    breakPoint = textToSpeak.lastIndexOf(' ', maxChars);
-                }
-                if (breakPoint > 0) {
-                    textToSpeak = textToSpeak.substring(0, breakPoint + 1);
-                }
-            }
-
-            // Create utterance
-            const utterance = new SpeechSynthesisUtterance(textToSpeak);
-            utterance.rate = this.speechRate;
-
-            // Smart voice selection
-            if (this.smartVoices) {
-                if (paragraph.isDialogue) {
-                    // If we detected a speaker, use their assigned voice
-                    if (paragraph.speaker) {
-                        utterance.voice = this.getVoiceForSpeaker(paragraph.speaker);
-                    } else {
-                        utterance.voice = this.dialogueVoice;
-                    }
-                    // Slightly increase pitch for dialogue to differentiate
-                    utterance.pitch = 1.1;
-                } else {
-                    utterance.voice = this.narratorVoice;
-                    utterance.pitch = 1.0;
-                }
-            } else {
-                utterance.voice = this.narratorVoice;
-            }
-
-            // Handle completion
-            utterance.onend = () => {
-                this.currentParagraphIndex++;
-                if (this.isPlaying) {
-                    // Small delay between paragraphs for natural pacing
-                    setTimeout(() => this.speakCurrent(), 300);
-                }
-            };
-
-            utterance.onerror = (e) => {
-                console.error('Speech error:', e);
-                // iOS Safari workaround: Try to recover from speech errors
-                if (isIOSSafari) {
-                    this.speechSynthesis.cancel();
-                }
-                // Try to continue despite error
-                this.currentParagraphIndex++;
-                if (this.isPlaying) {
-                    setTimeout(() => this.speakCurrent(), isIOSSafari ? 500 : 300);
-                }
-            };
-
-            this.currentUtterance = utterance;
-            this.speechSynthesis.speak(utterance);
-        }, speakDelay);
-    }
-
-    rewind() {
-        const wasPlaying = this.isPlaying;
-        this.pause();
-        
-        // Go back 5 paragraphs (roughly 10-15 seconds)
-        this.currentParagraphIndex = Math.max(0, this.currentParagraphIndex - 5);
-        this.updateDisplay();
-        
-        if (wasPlaying) {
-            setTimeout(() => this.play(), 100);
-        }
-    }
-
-    forward() {
-        const wasPlaying = this.isPlaying;
-        this.pause();
-        
-        // Skip forward 5 paragraphs
-        this.currentParagraphIndex = Math.min(
-            this.paragraphs.length - 1, 
-            this.currentParagraphIndex + 5
-        );
-        this.updateDisplay();
-        
-        if (wasPlaying) {
-            setTimeout(() => this.play(), 100);
-        }
-    }
-
-    seekToPercent(percent) {
-        const wasPlaying = this.isPlaying;
-        this.pause();
-        
-        this.currentParagraphIndex = Math.floor(percent * this.paragraphs.length);
-        this.currentParagraphIndex = Math.max(0, Math.min(this.paragraphs.length - 1, this.currentParagraphIndex));
-        this.updateDisplay();
-        
-        if (wasPlaying) {
-            setTimeout(() => this.play(), 100);
-        }
-    }
-
-    resetReader() {
-        this.pause();
-        
-        // iOS Safari workaround: Clean up the speech timer
-        if (isIOSSafari) {
-            this.stopIOSSpeechTimer();
-            this.iosSpeechInitialized = false;
-        }
-        
-        this.pdfDoc = null;
-        this.textContent = [];
-        this.paragraphs = [];
-        this.currentParagraphIndex = 0;
-        this.speakerVoices.clear();
-        
-        this.readerSection.classList.add('hidden');
-        this.uploadSection.classList.remove('hidden');
-        
-        // Reset file input
-        this.fileInput.value = '';
-    }
-
-    showLoading(show) {
-        if (show) {
-            this.loadingOverlay.classList.remove('hidden');
-        } else {
-            this.loadingOverlay.classList.add('hidden');
-        }
-    }
+  showToast(message) {
+    clearTimeout(this.toastTimer); this.toast.textContent = message; this.toast.classList.remove('hidden');
+    this.toastTimer = setTimeout(() => this.toast.classList.add('hidden'), 3200);
+  }
 }
 
-// iOS Safari viewport height fix
-// Sets a CSS variable to the actual viewport height
-function setViewportHeight() {
-    const vh = window.innerHeight * 0.01;
-    document.documentElement.style.setProperty('--vh', `${vh}px`);
-}
-
-// Set initial viewport height and update on resize/orientation change
-setViewportHeight();
-window.addEventListener('resize', setViewportHeight);
-window.addEventListener('orientationchange', () => {
-    // Small delay to allow iOS Safari to finish orientation animation
-    setTimeout(setViewportHeight, 100);
-});
-
-// Initialize the app when DOM is ready
-document.addEventListener('DOMContentLoaded', () => {
-    new PDFStoryReader();
-});
+document.addEventListener('DOMContentLoaded', () => { new PDFStoryReader(); });
